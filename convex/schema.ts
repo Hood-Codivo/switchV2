@@ -2,8 +2,47 @@ import { defineSchema, defineTable } from "convex/server"
 import { v } from "convex/values"
 import { authTables } from "@convex-dev/auth/server"
 
+export const CATEGORIES = [
+  "Gaming",
+  "Podcast",
+  "Education",
+  "IRL",
+  "Music",
+  "Business",
+  "Tech",
+  "Other",
+] as const
+
+export type StreamCategory = (typeof CATEGORIES)[number]
+
+export const categoryValidator = v.union(
+  v.literal("Gaming"),
+  v.literal("Podcast"),
+  v.literal("Education"),
+  v.literal("IRL"),
+  v.literal("Music"),
+  v.literal("Business"),
+  v.literal("Tech"),
+  v.literal("Other"),
+)
+
 export default defineSchema({
   ...authTables,
+  streams: defineTable({
+    creatorId: v.id("users"),
+    title: v.string(),
+    category: categoryValidator,
+    isLive: v.boolean(),
+    viewerCount: v.number(),
+    playbackUrl: v.optional(v.string()),
+    startedAt: v.optional(v.number()),
+  })
+    .index("by_is_live_and_viewer_count", ["isLive", "viewerCount"])
+    .index("by_creator", ["creatorId"])
+    .searchIndex("search_title", {
+      searchField: "title",
+      filterFields: ["isLive", "category"],
+    }),
   follows: defineTable({
     followerId: v.id("users"),
     creatorId: v.id("users"),

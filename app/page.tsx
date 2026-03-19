@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation"
+import { DiscoveryFeed } from "@/components/discovery-feed"
 
-export default function RootPage() {
-  redirect("/dashboard")
+export default function HomePage() {
+  return <DiscoveryFeed />
 }
