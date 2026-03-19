@@ -4,6 +4,13 @@ import { authTables } from "@convex-dev/auth/server"
 
 export default defineSchema({
   ...authTables,
+  follows: defineTable({
+    followerId: v.id("users"),
+    creatorId: v.id("users"),
+  })
+    .index("by_follower", ["followerId"])
+    .index("by_creator", ["creatorId"])
+    .index("by_follower_and_creator", ["followerId", "creatorId"]),
   // Extends the authTables users table with our custom fields.
   // @convex-dev/auth creates the user record on first OAuth sign-in with email etc.
   // Our completeOnboarding mutation patches it with username, displayName, etc.
@@ -23,6 +30,7 @@ export default defineSchema({
     bio: v.optional(v.string()),
     avatarUrl: v.optional(v.union(v.string(), v.null())),
     pointsBalance: v.optional(v.number()),
+    followerCount: v.optional(v.number()),
     createdAt: v.optional(v.number()),
   })
     .index("email", ["email"]) // required by @convex-dev/auth
