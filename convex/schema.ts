@@ -43,6 +43,15 @@ export default defineSchema({
       searchField: "title",
       filterFields: ["isLive", "category"],
     }),
+  studioSessions: defineTable({
+    creatorId: v.id("users"),
+    cloudflareRoomId: v.string(),
+    creatorAuthToken: v.string(),
+    status: v.union(v.literal("active"), v.literal("ended")),
+    createdAt: v.number(),
+  })
+    .index("by_creator", ["creatorId"])
+    .index("by_creator_and_status", ["creatorId", "status"]),
   follows: defineTable({
     followerId: v.id("users"),
     creatorId: v.id("users"),
