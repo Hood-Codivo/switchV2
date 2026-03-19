@@ -1,0 +1,8 @@
+node_modules
+
+.env.local
+
+# Convex generated files (overwritten by `npx convex dev`)
+convex/_generated/
+
+.next
