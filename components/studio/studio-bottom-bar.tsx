@@ -14,7 +14,79 @@ import {
 } from "lucide-react"
 import { useRealtimeKitSelector } from "@cloudflare/realtimekit-react"
 import { cn } from "@/lib/utils"
-import type { StudioDevice } from "@/hooks/use-studio"
+import type { StudioDevice, StudioSource } from "@/hooks/use-studio"
+
+// ─── Source tile video element ────────────────────────────────────────────────
+// useEffect is required: setting srcObject is an imperative browser API.
+
+function SourceVideoEl({ track }: { track: MediaStreamTrack; mirror?: boolean }) {
+  const ref = useRef<HTMLVideoElement>(null)
+
+  useEffect(() => {
+    if (!ref.current) return
+    ref.current.srcObject = new MediaStream([track])
+    void ref.current.play().catch(() => {})
+  }, [track])
+
+  return (
+    <video
+      ref={ref}
+      muted
+      autoPlay
+      playsInline
+      className="size-full object-cover [transform:scaleX(-1)]"
+    />
+  )
+}
+
+// ─── Source tile ──────────────────────────────────────────────────────────────
+
+function SourceTile({
+  source,
+  isOnCanvas,
+  onClick,
+}: {
+  source: StudioSource
+  isOnCanvas: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "relative aspect-video w-36 flex-shrink-0 overflow-hidden rounded-lg bg-zinc-800 transition-all",
+        isOnCanvas ? "ring-2 ring-blue-500" : "ring-1 ring-zinc-700 hover:ring-zinc-500",
+      )}
+    >
+      {source.videoEnabled && source.track ? (
+        <SourceVideoEl track={source.track} />
+      ) : (
+        <div className="flex size-full items-center justify-center">
+          <div className="flex size-9 items-center justify-center rounded-full bg-zinc-700 text-sm font-semibold text-zinc-300">
+            {source.label[0]?.toUpperCase() ?? "?"}
+          </div>
+        </div>
+      )}
+
+      {/* Label */}
+      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-2 py-1.5">
+        <span className="text-[10px] font-medium text-white">{source.label}</span>
+      </div>
+
+      {/* Muted indicator */}
+      {!source.audioEnabled && source.type === "camera" && (
+        <div className="absolute left-1.5 top-1.5 rounded bg-red-600/90 p-0.5">
+          <MicOff className="size-2.5 text-white" />
+        </div>
+      )}
+
+      {/* On-canvas indicator */}
+      {isOnCanvas && (
+        <div className="absolute right-1.5 top-1.5 size-2 rounded-full bg-blue-500" />
+      )}
+    </button>
+  )
+}
 
 // ─── Device selection dropdown ────────────────────────────────────────────────
 
@@ -52,104 +124,55 @@ function DeviceMenu({
   )
 }
 
-// ─── Source strip tile ────────────────────────────────────────────────────────
-
-function SourceTile({
-  videoTrack,
-  label,
-  audioEnabled,
-  videoEnabled,
-}: {
-  videoTrack: MediaStreamTrack | null
-  label: string
-  audioEnabled: boolean
-  videoEnabled: boolean
-}) {
-  return (
-    <div className="relative aspect-video w-36 flex-shrink-0 overflow-hidden rounded-lg bg-zinc-800 ring-2 ring-blue-500/50">
-      {videoEnabled && videoTrack ? (
-        // useEffect is required: setting srcObject is an imperative browser API
-        <LocalVideoEl track={videoTrack} />
-      ) : (
-        <div className="flex size-full items-center justify-center">
-          <div className="flex size-9 items-center justify-center rounded-full bg-zinc-700 text-sm font-semibold text-zinc-300">
-            {label[0]?.toUpperCase() ?? "?"}
-          </div>
-        </div>
-      )}
-      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-2 py-1.5">
-        <span className="text-[10px] font-medium text-white">{label}</span>
-      </div>
-      {!audioEnabled && (
-        <div className="absolute left-1.5 top-1.5 rounded bg-red-600/90 p-0.5">
-          <MicOff className="size-2.5 text-white" />
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ─── Local video element (mirrored, bound to a track) ─────────────────────────
-// useEffect is required: setting srcObject is an imperative browser API.
-
-function LocalVideoEl({ track }: { track: MediaStreamTrack }) {
-  const ref = useRef<HTMLVideoElement>(null)
-
-  useEffect(() => {
-    if (!ref.current) return
-    ref.current.srcObject = new MediaStream([track])
-    void ref.current.play().catch(() => {})
-  }, [track])
-
-  return (
-    <video
-      ref={ref}
-      muted
-      autoPlay
-      playsInline
-      className="size-full object-cover [transform:scaleX(-1)]"
-    />
-  )
-}
-
-// ─── Bottom bar ────────────────────────────────────────────────────────────────
+// ─── Bottom bar ───────────────────────────────────────────────────────────────
 
 type StudioBottomBarProps = {
+  sources: StudioSource[]
+  onCanvasSlots: (StudioSource | null)[]
   cameras: StudioDevice[]
   microphones: StudioDevice[]
   toggleVideo: () => Promise<void>
   toggleAudio: () => Promise<void>
   switchCamera: (deviceId: string) => Promise<void>
   switchMicrophone: (deviceId: string) => Promise<void>
-  shareScreen: () => Promise<void>
+  toggleScreenShare: () => Promise<void>
+  toggleSourceOnCanvas: (sourceId: string) => void
 }
 
 export function StudioBottomBar({
+  sources,
+  onCanvasSlots,
   cameras,
   microphones,
   toggleVideo,
   toggleAudio,
   switchCamera,
   switchMicrophone,
-  shareScreen,
+  toggleScreenShare,
+  toggleSourceOnCanvas,
 }: StudioBottomBarProps) {
   const videoEnabled = useRealtimeKitSelector((m) => m.self.videoEnabled)
   const audioEnabled = useRealtimeKitSelector((m) => m.self.audioEnabled)
-  const videoTrack = useRealtimeKitSelector((m) => m.self.videoTrack ?? null)
+  const screenShareEnabled = useRealtimeKitSelector((m) => m.self.screenShareEnabled)
 
   const [showCameraMenu, setShowCameraMenu] = useState(false)
   const [showMicMenu, setShowMicMenu] = useState(false)
+
+  const onCanvasIds = new Set(onCanvasSlots.filter(Boolean).map((s) => s!.id))
 
   return (
     <div className="flex-shrink-0 border-t border-zinc-800 bg-zinc-900">
       {/* Source tiles */}
       <div className="flex items-center gap-3 overflow-x-auto px-4 py-3">
-        <SourceTile
-          videoTrack={videoTrack}
-          label="You"
-          audioEnabled={audioEnabled}
-          videoEnabled={videoEnabled}
-        />
+        {sources.map((source) => (
+          <SourceTile
+            key={source.id}
+            source={source}
+            isOnCanvas={onCanvasIds.has(source.id)}
+            onClick={() => toggleSourceOnCanvas(source.id)}
+          />
+        ))}
+        {/* Present / invite placeholder */}
         <button className="flex aspect-video w-36 flex-shrink-0 flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-zinc-700 text-zinc-600 transition-colors hover:border-zinc-500 hover:text-zinc-400">
           <UserPlus className="size-5" />
           <span className="text-[10px] font-medium">Present or invite</span>
@@ -243,8 +266,13 @@ export function StudioBottomBar({
 
           {/* Screen share */}
           <button
-            onClick={() => void shareScreen()}
-            className="flex items-center justify-center rounded-full bg-zinc-700 px-3.5 py-2.5 text-white transition-colors hover:bg-zinc-600"
+            onClick={() => void toggleScreenShare()}
+            className={cn(
+              "flex items-center justify-center rounded-full px-3.5 py-2.5 transition-colors",
+              screenShareEnabled
+                ? "bg-blue-600 text-white hover:bg-blue-700"
+                : "bg-zinc-700 text-white hover:bg-zinc-600",
+            )}
           >
             <Monitor className="size-4" />
           </button>

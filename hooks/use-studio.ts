@@ -5,6 +5,10 @@ import { useAction, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useRealtimeKitClient } from "@cloudflare/realtimekit-react"
 import type RTKClient from "@cloudflare/realtimekit"
+import { STUDIO_LAYOUT_MAP, DEFAULT_LAYOUT_ID } from "@/lib/studio-layouts"
+import type { LayoutConfig } from "@/lib/studio-layouts"
+
+// ─── Public types ─────────────────────────────────────────────────────────────
 
 export type StudioStatus =
   | "idle"
@@ -19,21 +23,81 @@ export type StudioDevice = {
   kind: MediaDeviceKind
 }
 
+export type StudioSource = {
+  id: string
+  type: "camera" | "screenshare"
+  label: string
+  track: MediaStreamTrack | null
+  videoEnabled: boolean
+  audioEnabled: boolean
+  isSelf: boolean
+}
+
 export type UseStudioReturn = {
   status: StudioStatus
   error: string | null
   client: RTKClient | undefined
   compositorStream: MediaStream | null
+  sources: StudioSource[]
+  onCanvasSlots: (StudioSource | null)[]
+  activeLayoutId: string
   cameras: StudioDevice[]
   microphones: StudioDevice[]
   toggleVideo: () => Promise<void>
   toggleAudio: () => Promise<void>
   switchCamera: (deviceId: string) => Promise<void>
   switchMicrophone: (deviceId: string) => Promise<void>
-  shareScreen: () => Promise<void>
+  toggleScreenShare: () => Promise<void>
+  toggleSourceOnCanvas: (sourceId: string) => void
+  switchLayout: (layoutId: string) => void
   startSession: () => Promise<void>
   endSession: () => Promise<void>
 }
+
+// ─── Video element cache ───────────────────────────────────────────────────────
+// One HTMLVideoElement per source, reused across rAF frames.
+
+type VideoElEntry = { el: HTMLVideoElement; track: MediaStreamTrack }
+
+function getOrCreateVideoEl(
+  cache: Map<string, VideoElEntry>,
+  source: StudioSource,
+): HTMLVideoElement | null {
+  if (!source.videoEnabled || !source.track) return null
+
+  const entry = cache.get(source.id)
+
+  if (entry) {
+    // Update srcObject only when the track reference changes
+    if (entry.track !== source.track) {
+      entry.el.srcObject = new MediaStream([source.track])
+      void entry.el.play().catch(() => {})
+      cache.set(source.id, { el: entry.el, track: source.track })
+    }
+    return entry.el
+  }
+
+  const el = document.createElement("video")
+  el.muted = true
+  el.srcObject = new MediaStream([source.track])
+  void el.play().catch(() => {})
+  cache.set(source.id, { el, track: source.track })
+  return el
+}
+
+function cleanupStaleVideoEls(
+  cache: Map<string, VideoElEntry>,
+  currentIds: Set<string>,
+) {
+  cache.forEach((entry, id) => {
+    if (!currentIds.has(id)) {
+      entry.el.srcObject = null
+      cache.delete(id)
+    }
+  })
+}
+
+// ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useStudio(): UseStudioReturn {
   const [status, setStatus] = useState<StudioStatus>("idle")
@@ -41,17 +105,150 @@ export function useStudio(): UseStudioReturn {
   const [compositorStream, setCompositorStream] = useState<MediaStream | null>(null)
   const [cameras, setCameras] = useState<StudioDevice[]>([])
   const [microphones, setMicrophones] = useState<StudioDevice[]>([])
+  const [sources, setSources] = useState<StudioSource[]>([])
+  const [onCanvasSlots, _setOnCanvasSlots] = useState<(StudioSource | null)[]>([null, null])
+  const [activeLayoutId, _setActiveLayoutId] = useState(DEFAULT_LAYOUT_ID)
 
   const [meeting, initMeeting] = useRealtimeKitClient()
+
+  // Refs that the rAF compositor loop reads from — avoids stale closures.
+  // rtkClientRef holds the initialized client for use in callbacks; `meeting`
+  // from useRealtimeKitClient may not be re-rendered yet when event handlers fire.
+  const rtkClientRef = useRef<RTKClient | null>(null)
+  const onCanvasSlotsRef = useRef<(StudioSource | null)[]>([null, null])
+  const activeLayoutRef = useRef<LayoutConfig>(STUDIO_LAYOUT_MAP[DEFAULT_LAYOUT_ID])
+  const sourcesRef = useRef<StudioSource[]>([])
+  const videoElCacheRef = useRef<Map<string, VideoElEntry>>(new Map())
   const animFrameRef = useRef<number | null>(null)
   const isActiveRef = useRef(false)
 
   const createSession = useAction(api.studio.createStudioSession)
   const endSessionAction = useAction(api.studio.endStudioSession)
 
-  // Subscribes to the active session record — will be used in Slice N to restore
+  // Subscribes to the active session record — will be used to restore
   // compositor state and stream background when the page reloads mid-session.
   useQuery(api.studio.getActiveSession)
+
+  // ─── Slot helpers ─────────────────────────────────────────────────────────
+
+  const setOnCanvasSlots = useCallback((slots: (StudioSource | null)[]) => {
+    onCanvasSlotsRef.current = slots
+    _setOnCanvasSlots(slots)
+  }, [])
+
+  // ─── Source management ────────────────────────────────────────────────────
+
+  const refreshSources = useCallback(() => {
+    const client = rtkClientRef.current
+    if (!isActiveRef.current || !client) return
+
+    const all: StudioSource[] = []
+
+    // Self camera
+    all.push({
+      id: `${client.self.id}:camera`,
+      type: "camera",
+      label: "You",
+      track: client.self.videoTrack ?? null,
+      videoEnabled: client.self.videoEnabled,
+      audioEnabled: client.self.audioEnabled,
+      isSelf: true,
+    })
+
+    // Self screen share (only present when active)
+    if (client.self.screenShareEnabled) {
+      all.push({
+        id: `${client.self.id}:screen`,
+        type: "screenshare",
+        label: "Your Screen",
+        track: client.self.screenShareTracks?.video ?? null,
+        videoEnabled: true,
+        audioEnabled: false,
+        isSelf: true,
+      })
+    }
+
+    // Remote participants
+    client.participants.joined.forEach((participant) => {
+      all.push({
+        id: `${participant.id}:camera`,
+        type: "camera",
+        label: participant.name || "Guest",
+        track: participant.videoTrack ?? null,
+        videoEnabled: participant.videoEnabled,
+        audioEnabled: participant.audioEnabled,
+        isSelf: false,
+      })
+    })
+
+    // Clean up video elements for departed sources
+    const currentIds = new Set(all.map((s) => s.id))
+    cleanupStaleVideoEls(videoElCacheRef.current, currentIds)
+
+    // Refresh slot references — null out departed, update track refs for present
+    const refreshedSlots = onCanvasSlotsRef.current.map((slot) => {
+      if (!slot) return null
+      return all.find((s) => s.id === slot.id) ?? null
+    })
+    setOnCanvasSlots(refreshedSlots)
+
+    sourcesRef.current = all
+    setSources(all)
+  }, [setOnCanvasSlots])
+
+  // ─── Canvas compositor ────────────────────────────────────────────────────
+  // Single rAF loop draws all on-canvas slots at their layout-defined positions.
+  // Reads from refs so the closure never goes stale.
+
+  const startCompositorLoop = useCallback(() => {
+    const canvas = document.createElement("canvas")
+    canvas.width = 1280
+    canvas.height = 720
+    const ctx = canvas.getContext("2d")!
+    let lastFrameTime = 0
+
+    function draw(timestamp: number) {
+      // Cap draw rate to 30fps to match captureStream(30) and halve CPU usage
+      if (timestamp - lastFrameTime < 1000 / 30) {
+        animFrameRef.current = requestAnimationFrame(draw)
+        return
+      }
+      lastFrameTime = timestamp
+
+      ctx.fillStyle = "#111111"
+      ctx.fillRect(0, 0, 1280, 720)
+
+      const layout = activeLayoutRef.current
+      const slots = onCanvasSlotsRef.current
+
+      layout.slots.forEach((slotDef, i) => {
+        const source = slots[i]
+        if (!source) return
+        const videoEl = getOrCreateVideoEl(videoElCacheRef.current, source)
+        if (!videoEl || videoEl.readyState < 2) return
+        ctx.drawImage(
+          videoEl,
+          Math.round(slotDef.x * 1280),
+          Math.round(slotDef.y * 720),
+          Math.round(slotDef.w * 1280),
+          Math.round(slotDef.h * 720),
+        )
+      })
+
+      animFrameRef.current = requestAnimationFrame(draw)
+    }
+
+    animFrameRef.current = requestAnimationFrame((ts) => draw(ts))
+    setCompositorStream(canvas.captureStream(30))
+  }, [])
+
+  const stopCompositorLoop = useCallback(() => {
+    if (animFrameRef.current !== null) {
+      cancelAnimationFrame(animFrameRef.current)
+      animFrameRef.current = null
+    }
+    setCompositorStream(null)
+  }, [])
 
   // ─── Device enumeration ───────────────────────────────────────────────────
 
@@ -69,43 +266,6 @@ export function useStudio(): UseStudioReturn {
     )
   }, [])
 
-  // ─── Canvas compositor ────────────────────────────────────────────────────
-  // Draws the active video track onto a 1280×720 canvas at 30fps.
-  // Slice 5 will extend this to composite multiple participant tiles.
-
-  const startCompositor = useCallback((videoTrack: MediaStreamTrack) => {
-    if (animFrameRef.current !== null) {
-      cancelAnimationFrame(animFrameRef.current)
-    }
-
-    const canvas = document.createElement("canvas")
-    canvas.width = 1280
-    canvas.height = 720
-
-    const videoEl = document.createElement("video")
-    videoEl.srcObject = new MediaStream([videoTrack])
-    videoEl.muted = true
-    void videoEl.play()
-
-    const ctx2d = canvas.getContext("2d")!
-
-    function draw() {
-      ctx2d.drawImage(videoEl, 0, 0, canvas.width, canvas.height)
-      animFrameRef.current = requestAnimationFrame(draw)
-    }
-    animFrameRef.current = requestAnimationFrame(draw)
-
-    setCompositorStream(canvas.captureStream(30))
-  }, [])
-
-  const stopCompositor = useCallback(() => {
-    if (animFrameRef.current !== null) {
-      cancelAnimationFrame(animFrameRef.current)
-      animFrameRef.current = null
-    }
-    setCompositorStream(null)
-  }, [])
-
   // ─── Session lifecycle ────────────────────────────────────────────────────
 
   const startSession = useCallback(async () => {
@@ -114,7 +274,6 @@ export function useStudio(): UseStudioReturn {
       setError(null)
 
       const { authToken } = await createSession({})
-
       setStatus("connecting")
 
       const client = await initMeeting({ authToken })
@@ -122,116 +281,181 @@ export function useStudio(): UseStudioReturn {
 
       await client.join()
 
-      // Keep compositor in sync with video track changes (e.g. device switch, remote mute)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(client.self as any).on("videoUpdate", () => {
-        if (client.self.videoEnabled && client.self.videoTrack) {
-          startCompositor(client.self.videoTrack)
-        } else {
-          stopCompositor()
-        }
-      })
-
-      // Bootstrap compositor if the preset auto-enables video on join
-      if (client.self.videoEnabled && client.self.videoTrack) {
-        startCompositor(client.self.videoTrack)
-      }
-
+      rtkClientRef.current = client
       isActiveRef.current = true
+
+      // RTK's TypeScript bindings don't expose .on() on self or participants;
+      // cast to any to access the underlying EventEmitter API.
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      ;(client.self as any).on("videoUpdate", refreshSources)
+      ;(client.self as any).on("audioUpdate", refreshSources)
+      ;(client.self as any).on("screenShareUpdate", refreshSources)
+
+      ;(client.participants as any).on("participantJoined", (participant: any) => {
+        ;(participant as any).on("videoUpdate", refreshSources)
+        ;(participant as any).on("audioUpdate", refreshSources)
+        refreshSources()
+      })
+      ;(client.participants as any).on("participantLeft", refreshSources)
+      /* eslint-enable @typescript-eslint/no-explicit-any */
+
+      // Build initial sources and place self camera in slot 0
+      refreshSources()
+      const selfCamera = sourcesRef.current.find((s) => s.id === `${client.self.id}:camera`) ?? null
+      const layout = STUDIO_LAYOUT_MAP[DEFAULT_LAYOUT_ID]
+      const initialSlots: (StudioSource | null)[] = layout.slots.map((_, i) => (i === 0 ? selfCamera : null))
+      setOnCanvasSlots(initialSlots)
+
+      startCompositorLoop()
       await refreshDevices()
       setStatus("connected")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start studio session")
       setStatus("error")
     }
-  }, [createSession, initMeeting, refreshDevices, startCompositor, stopCompositor])
+  }, [createSession, initMeeting, refreshSources, setOnCanvasSlots, startCompositorLoop, refreshDevices])
 
   const endSession = useCallback(async () => {
+    const client = rtkClientRef.current
     try {
-      if (isActiveRef.current) {
-        if (meeting.self.videoEnabled) await meeting.self.disableVideo()
-        if (meeting.self.audioEnabled) await meeting.self.disableAudio()
-        await meeting.leaveRoom()
+      if (isActiveRef.current && client) {
+        if (client.self.videoEnabled) await client.self.disableVideo()
+        if (client.self.audioEnabled) await client.self.disableAudio()
+        if (client.self.screenShareEnabled) await client.self.disableScreenShare()
+        await client.leaveRoom()
       }
     } finally {
       isActiveRef.current = false
-      stopCompositor()
+      rtkClientRef.current = null
+      stopCompositorLoop()
+      videoElCacheRef.current.clear()
+      setOnCanvasSlots([null, null])
+      setSources([])
       await endSessionAction({})
       setStatus("idle")
     }
-  }, [meeting, endSessionAction, stopCompositor])
+  }, [endSessionAction, stopCompositorLoop, setOnCanvasSlots])
 
   // ─── Track controls ───────────────────────────────────────────────────────
 
   const toggleVideo = useCallback(async () => {
-    if (!isActiveRef.current) return
-    if (meeting.self.videoEnabled) {
-      await meeting.self.disableVideo()
+    const client = rtkClientRef.current
+    if (!isActiveRef.current || !client) return
+    if (client.self.videoEnabled) {
+      await client.self.disableVideo()
     } else {
-      await meeting.self.enableVideo()
+      await client.self.enableVideo()
     }
-  }, [meeting])
+  }, [])
 
   const toggleAudio = useCallback(async () => {
-    if (!isActiveRef.current) return
-    if (meeting.self.audioEnabled) {
-      await meeting.self.disableAudio()
+    const client = rtkClientRef.current
+    if (!isActiveRef.current || !client) return
+    if (client.self.audioEnabled) {
+      await client.self.disableAudio()
     } else {
-      await meeting.self.enableAudio()
+      await client.self.enableAudio()
     }
-  }, [meeting])
+  }, [])
 
   const switchCamera = useCallback(
     async (deviceId: string) => {
-      if (!isActiveRef.current) return
+      const client = rtkClientRef.current
+      if (!isActiveRef.current || !client) return
       const device = cameras.find((d) => d.deviceId === deviceId)
-      if (device) await meeting.self.setDevice(device as MediaDeviceInfo)
+      if (device) await client.self.setDevice(device as MediaDeviceInfo)
     },
-    [meeting, cameras],
+    [cameras],
   )
 
   const switchMicrophone = useCallback(
     async (deviceId: string) => {
-      if (!isActiveRef.current) return
+      const client = rtkClientRef.current
+      if (!isActiveRef.current || !client) return
       const device = microphones.find((d) => d.deviceId === deviceId)
-      if (device) await meeting.self.setDevice(device as MediaDeviceInfo)
+      if (device) await client.self.setDevice(device as MediaDeviceInfo)
     },
-    [meeting, microphones],
+    [microphones],
   )
 
-  const shareScreen = useCallback(async () => {
-    if (!isActiveRef.current) return
+  const toggleScreenShare = useCallback(async () => {
+    const client = rtkClientRef.current
+    if (!isActiveRef.current || !client) return
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true })
-      const screenTrack = stream.getVideoTracks()[0]
-      if (screenTrack) await meeting.self.enableVideo(screenTrack)
+      if (client.self.screenShareEnabled) {
+        await client.self.disableScreenShare()
+      } else {
+        await client.self.enableScreenShare()
+      }
     } catch (err) {
-      // User cancelled the picker — not an error worth surfacing
       if (err instanceof DOMException && err.name === "NotAllowedError") return
       setError(err instanceof Error ? err.message : "Screen share failed")
     }
-  }, [meeting])
+  }, [])
+
+  // ─── Canvas slot management ───────────────────────────────────────────────
+
+  const toggleSourceOnCanvas = useCallback(
+    (sourceId: string) => {
+      const slots = [...onCanvasSlotsRef.current]
+      const existingIdx = slots.findIndex((s) => s?.id === sourceId)
+
+      if (existingIdx !== -1) {
+        slots[existingIdx] = null
+      } else {
+        const source = sourcesRef.current.find((s) => s.id === sourceId)
+        if (!source) return
+        const emptyIdx = slots.findIndex((s) => s === null)
+        if (emptyIdx !== -1) {
+          slots[emptyIdx] = source
+        } else {
+          slots[slots.length - 1] = source
+        }
+      }
+
+      setOnCanvasSlots(slots)
+    },
+    [setOnCanvasSlots],
+  )
+
+  const switchLayout = useCallback(
+    (layoutId: string) => {
+      const layout = STUDIO_LAYOUT_MAP[layoutId]
+      if (!layout) return
+      activeLayoutRef.current = layout
+      _setActiveLayoutId(layoutId)
+      // Trim/pad slots to the new slot count
+      const newSlots = layout.slots.map((_, i) => onCanvasSlotsRef.current[i] ?? null)
+      setOnCanvasSlots(newSlots)
+    },
+    [setOnCanvasSlots],
+  )
 
   // ─── Cleanup on unmount ───────────────────────────────────────────────────
 
   useEffect(() => {
     return () => {
-      stopCompositor()
+      stopCompositorLoop()
     }
-  }, [stopCompositor])
+  }, [stopCompositorLoop])
 
   return {
     status,
     error,
     client: status === "connected" ? meeting : undefined,
     compositorStream,
+    sources,
+    onCanvasSlots,
+    activeLayoutId,
     cameras,
     microphones,
     toggleVideo,
     toggleAudio,
     switchCamera,
     switchMicrophone,
-    shareScreen,
+    toggleScreenShare,
+    toggleSourceOnCanvas,
+    switchLayout,
     startSession,
     endSession,
   }
