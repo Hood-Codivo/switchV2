@@ -181,3 +181,41 @@ describe("endStudioSessionRecord", () => {
     ).resolves.not.toThrow()
   })
 })
+
+describe("generateInviteToken", () => {
+  it("stores an invite token on the active session and returns the token", async () => {
+    const t = convexTest(schema, modules)
+    const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
+    await t.mutation(internal.studio.storeStudioSession, {
+      creatorId: userId as DataModel["studioSessions"]["document"]["creatorId"],
+      cloudflareRoomId: "cf-room-1",
+      creatorAuthToken: "token-1",
+    })
+
+    const token = await t.withIdentity({ subject: userId }).mutation(api.studio.generateInviteToken, {})
+
+    expect(typeof token).toBe("string")
+    expect(token.length).toBeGreaterThan(0)
+
+    const session = await t.withIdentity({ subject: userId }).query(api.studio.getActiveSession, {})
+    expect(session?.inviteToken).toBe(token)
+    expect(session?.inviteTokenExpiresAt).toBeGreaterThan(Date.now())
+  })
+
+  it("throws if there is no active session", async () => {
+    const t = convexTest(schema, modules)
+    const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
+
+    await expect(
+      t.withIdentity({ subject: userId }).mutation(api.studio.generateInviteToken, {}),
+    ).rejects.toThrow("No active studio session")
+  })
+
+  it("throws if unauthenticated", async () => {
+    const t = convexTest(schema, modules)
+
+    await expect(
+      t.mutation(api.studio.generateInviteToken, {}),
+    ).rejects.toThrow()
+  })
+})

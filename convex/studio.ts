@@ -1,5 +1,5 @@
 import { v } from "convex/values"
-import { action, internalMutation, query } from "./_generated/server"
+import { action, internalMutation, mutation, query } from "./_generated/server"
 import { getAuthUserId } from "@convex-dev/auth/server"
 import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
@@ -62,6 +62,27 @@ export const endStudioSessionRecord = internalMutation({
       .first()
     if (!session) return
     await ctx.db.patch(session._id, { status: "ended" })
+  },
+})
+
+export const generateInviteToken = mutation({
+  args: {},
+  handler: async (ctx): Promise<string> => {
+    const userId = await getAuthUserId(ctx)
+    if (!userId) throw new Error("Not authenticated")
+
+    const session = await ctx.db
+      .query("studioSessions")
+      .withIndex("by_creator_and_status", (q) =>
+        q.eq("creatorId", userId).eq("status", "active"),
+      )
+      .first()
+    if (!session) throw new Error("No active studio session")
+
+    const token = crypto.randomUUID()
+    const expiresAt = Date.now() + 24 * 60 * 60 * 1000 // 24 hours
+    await ctx.db.patch(session._id, { inviteToken: token, inviteTokenExpiresAt: expiresAt })
+    return token
   },
 })
 
