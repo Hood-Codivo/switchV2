@@ -49,9 +49,27 @@ export default defineSchema({
     creatorAuthToken: v.string(),
     status: v.union(v.literal("active"), v.literal("ended")),
     createdAt: v.number(),
+    inviteToken: v.optional(v.string()),
+    inviteTokenExpiresAt: v.optional(v.number()),
+    streamId: v.optional(v.id("streams")),
   })
     .index("by_creator", ["creatorId"])
-    .index("by_creator_and_status", ["creatorId", "status"]),
+    .index("by_creator_and_status", ["creatorId", "status"])
+    .index("by_invite_token", ["inviteToken"]),
+  studioGuests: defineTable({
+    sessionId: v.id("studioSessions"),
+    displayName: v.string(),
+    rtkAuthToken: v.optional(v.string()),
+    status: v.union(
+      v.literal("waiting"),
+      v.literal("admitted"),
+      v.literal("rejected"),
+      v.literal("removed"),
+    ),
+    createdAt: v.number(),
+  })
+    .index("by_session", ["sessionId"])
+    .index("by_session_and_status", ["sessionId", "status"]),
   follows: defineTable({
     followerId: v.id("users"),
     creatorId: v.id("users"),
