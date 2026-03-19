@@ -20,6 +20,9 @@ importers:
       '@cloudflare/realtimekit-react':
         specifier: ^1.2.5
         version: 1.2.5(react@19.2.4)
+      '@cloudflare/realtimekit-react-ui':
+        specifier: ^1.1.1
+        version: 1.1.1
       '@convex-dev/auth':
         specifier: ^0.0.91
         version: 0.0.91(@auth/core@0.37.4)(convex@1.33.1(react@19.2.4))(react@19.2.4)
@@ -292,10 +295,16 @@ packages:
       '@types/react':
         optional: true
 
+  '@cloudflare/realtimekit-react-ui@1.1.1':
+    resolution: {integrity: sha512-SY8cj1vJiUS63+KaDXkb+FDrCCuyj3nZUBxvfXJKdCvbUZRAKPtugIhfdhTwCzt1Ti3OBDRx5UrElid5sYUxcg==}
+
   '@cloudflare/realtimekit-react@1.2.5':
     resolution: {integrity: sha512-EDWcUr5ZGBD0CTZw/2FzLJiWx/p4KpTh4OLnqy2h13K4pV3AkEGJLaKDF34dKZNqyS721F8gB7UaJ6ZTw4dKJQ==}
     peerDependencies:
       react: '>=16.8.6'
+
+  '@cloudflare/realtimekit-ui@1.1.1':
+    resolution: {integrity: sha512-ZX7hF9mrCVZ9QunwlCppFNar9J3YzWiF/QsToRF4edEDzIVHD09Q4NtB7xgz8i+3hT/hRLCVFhclwWhCmSsWBA==}
 
   '@cloudflare/realtimekit@1.2.5':
     resolution: {integrity: sha512-hOEMcFRCWAQMFMmdvlxY31/BMwA/uzOqLzboTmJcyFkCmp+JiC5MdE+0Le57aMEtTly1x7LDT3UC/BVICsiDMw==}
@@ -2144,6 +2153,9 @@ packages:
     resolution: {integrity: sha512-gGgrVCoDKlIZ8fIqXBBb0pPKqDgki0Z/FSKNiQzSGj2uEYHr1tq5wmBegGwJx6QB5S5cM0khSBpi/JFHMCvsmQ==}
     engines: {node: ^12.22.0 || ^14.16.0 || ^16.0.0 || >=17.0.0}
 
+  hark@1.2.3:
+    resolution: {integrity: sha512-u68vz9SCa38ESiFJSDjqK8XbXqWzyot7Cj6Y2b6jk2NJ+II3MY2dIrLMg/kjtIAun4Y1DHF/20hfx4rq1G5GMg==}
+
   has-bigints@1.1.0:
     resolution: {integrity: sha512-R3pbpkcIqv2Pm3dUwgjclDRVmWpTJW2DcMzcIhEXEx1oh/CEMObMm3KLmRJOdvhM7o4uQBnwr8pzRK2sJWIqfg==}
     engines: {node: '>= 0.4'}
@@ -2179,6 +2191,9 @@ packages:
 
   hermes-parser@0.25.1:
     resolution: {integrity: sha512-6pEjquH3rqaI6cYAXYPcz9MS4rY6R4ngRgrgfDshRptUZIc3lw0MCIJIGDj9++mfySOuPTHB4nrSW99BCvOPIA==}
+
+  hls.js@1.6.15:
+    resolution: {integrity: sha512-E3a5VwgXimGHwpRGV+WxRTKeSp2DW5DI5MWv34ulL3t5UNmyJWCQ1KmLEHbYzcfThfXG8amBL+fCYPneGHC4VA==}
 
   hono@4.12.8:
     resolution: {integrity: sha512-VJCEvtrezO1IAR+kqEYnxUOoStaQPGrCmX3j4wDTNOcD1uRPFpGlwQUIW8niPuvHXaTUxeOUl5MMDGrl+tmO9A==}
@@ -2577,6 +2592,9 @@ packages:
   locate-path@6.0.0:
     resolution: {integrity: sha512-iPZK6eYjbxRu3uB4/WZ3EsEIMJFMqAoopl3R+zuq0UjcAm/MO6KCweDgPfP3elTztoKP3KtnVHxTn2NHBSDVUw==}
     engines: {node: '>=10'}
+
+  lodash-es@4.17.23:
+    resolution: {integrity: sha512-kVI48u3PZr38HdYz98UmfPnXl2DXrpdctLrFLCd3kOx1xUkOmpFPx7gCWWM5MPkL/fD8zb+Ph0QzjGFs4+hHWg==}
 
   lodash.merge@4.6.2:
     resolution: {integrity: sha512-0KpjqXRVvrYyCsX1swR/XTK0va6VQkQM6MNo7PqW77ByjAhoARA8EfrP1N4+KlKj8YS0ZUCtRT/YUuhyYDujIQ==}
@@ -3050,6 +3068,9 @@ packages:
 
   reselect@5.1.1:
     resolution: {integrity: sha512-K/BG6eIky/SBpzfHZv/dd+9JBFiS4SWV7FIujVyJRux6e45+73RaUHXLmIR1f7WOMaQ0U1km6qwklRQxpJJY0w==}
+
+  resize-observer-polyfill@1.5.1:
+    resolution: {integrity: sha512-LwZrotdHOo12nQuZlHEmtuXdqGoOD0OhaxopaNFxWzInpEgaLWoVuAMbTzixuosCx2nEG58ngzW3vxdWoxIgdg==}
 
   resolve-from@4.0.0:
     resolution: {integrity: sha512-pb/MYmXstAkysRFx8piNI1tGFNQIFA3vkE3Gq4EuA1dF6gHp/+vgZqsCGJapvy8N3Q+4o7FwvquPJcnZ7RYy4g==}
@@ -3615,6 +3636,9 @@ packages:
     engines: {node: '>=8'}
     hasBin: true
 
+  wildemitter@1.2.1:
+    resolution: {integrity: sha512-UMmSUoIQSir+XbBpTxOTS53uJ8s/lVhADCkEbhfRjUGFDPme/XGOb0sBWLx5sTz7Wx/2+TlAw1eK9O5lw5PiEw==}
+
   word-wrap@1.2.5:
     resolution: {integrity: sha512-BN22B5eaMMI9UMtjrGd5g5eCYPpCPDUy0FJXbYsaT5zYxjFOckS53SQDE3pWkVoWpHXVb3BrYcEN4Twa55B5cA==}
     engines: {node: '>=0.10.0'}
@@ -3923,10 +3947,22 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.14
 
+  '@cloudflare/realtimekit-react-ui@1.1.1':
+    dependencies:
+      '@cloudflare/realtimekit-ui': 1.1.1
+
   '@cloudflare/realtimekit-react@1.2.5(react@19.2.4)':
     dependencies:
       '@cloudflare/realtimekit': 1.2.5
       react: 19.2.4
+
+  '@cloudflare/realtimekit-ui@1.1.1':
+    dependencies:
+      '@floating-ui/dom': 1.7.6
+      hark: 1.2.3
+      hls.js: 1.6.15
+      lodash-es: 4.17.23
+      resize-observer-polyfill: 1.5.1
 
   '@cloudflare/realtimekit@1.2.5':
     dependencies:
@@ -5803,6 +5839,10 @@ snapshots:
 
   graphql@16.13.1: {}
 
+  hark@1.2.3:
+    dependencies:
+      wildemitter: 1.2.1
+
   has-bigints@1.1.0: {}
 
   has-flag@4.0.0: {}
@@ -5832,6 +5872,8 @@ snapshots:
   hermes-parser@0.25.1:
     dependencies:
       hermes-estree: 0.25.1
+
+  hls.js@1.6.15: {}
 
   hono@4.12.8: {}
 
@@ -6166,6 +6208,8 @@ snapshots:
   locate-path@6.0.0:
     dependencies:
       p-locate: 5.0.0
+
+  lodash-es@4.17.23: {}
 
   lodash.merge@4.6.2: {}
 
@@ -6591,6 +6635,8 @@ snapshots:
   require-from-string@2.0.2: {}
 
   reselect@5.1.1: {}
+
+  resize-observer-polyfill@1.5.1: {}
 
   resolve-from@4.0.0: {}
 
@@ -7278,6 +7324,8 @@ snapshots:
     dependencies:
       siginfo: 2.0.0
       stackback: 0.0.2
+
+  wildemitter@1.2.1: {}
 
   word-wrap@1.2.5: {}
 

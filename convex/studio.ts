@@ -73,52 +73,57 @@ export const createStudioSession = action({
     const userId = await getAuthUserId(ctx)
     if (!userId) throw new Error("Not authenticated")
 
-    const appId = process.env.CLOUDFLARE_REALTIME_APP_ID
-    const appSecret = process.env.CLOUDFLARE_REALTIME_APP_SECRET
-    if (!appId || !appSecret) throw new Error("Cloudflare Realtime not configured")
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN
+    const appId = process.env.CLOUDFLARE_REALTIMEKIT_APP_ID
+    if (!accountId || !apiToken || !appId) throw new Error("Cloudflare Realtime not configured")
+
+    const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/realtime/kit/${appId}`
+    const headers = {
+      Authorization: `Bearer ${apiToken}`,
+      "Content-Type": "application/json",
+    }
 
     // Create a meeting room
-    const meetingRes = await fetch(
-      `https://rtk.realtime.cloudflare.com/v2/apps/${appId}/meetings`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${appSecret}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
-      },
-    )
+    const meetingRes = await fetch(`${baseUrl}/meetings`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Switched Studio" }),
+    })
     if (!meetingRes.ok) {
-      throw new Error(`Failed to create CF meeting: ${meetingRes.status}`)
+      const body = await meetingRes.text()
+      throw new Error(`Failed to create meeting: ${meetingRes.status} — ${body}`)
     }
-    const meeting = (await meetingRes.json()) as { id: string }
+    const meetingBody = (await meetingRes.json()) as { data: { id: string } }
+    const meetingId = meetingBody.data.id
 
-    // Create a participant token for the creator
-    const participantRes = await fetch(
-      `https://rtk.realtime.cloudflare.com/v2/apps/${appId}/meetings/${meeting.id}/participants`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${appSecret}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ clientSpecificId: userId }),
-      },
-    )
+    // Create a participant token for the creator.
+    // preset_name selects the permissions preset — default presets are created
+    // automatically when you create the app in the Cloudflare dashboard.
+    const participantRes = await fetch(`${baseUrl}/meetings/${meetingId}/participants`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        name: "Creator",
+        preset_name: "livestream_host",
+        custom_participant_id: userId,
+      }),
+    })
     if (!participantRes.ok) {
-      throw new Error(`Failed to create CF participant: ${participantRes.status}`)
+      const body = await participantRes.text()
+      throw new Error(`Failed to create participant: ${participantRes.status} — ${body}`)
     }
-    const participant = (await participantRes.json()) as { token: string }
+    const participantBody = (await participantRes.json()) as { data: { token: string } }
+    const participant = participantBody.data
 
     // Persist to DB via internalMutation
     await ctx.runMutation(internal.studio.storeStudioSession, {
       creatorId: userId as Id<"users">,
-      cloudflareRoomId: meeting.id,
+      cloudflareRoomId: meetingId,
       creatorAuthToken: participant.token,
     })
 
-    return { authToken: participant.token, roomId: meeting.id }
+    return { authToken: participant.token, roomId: meetingId }
   },
 })
 

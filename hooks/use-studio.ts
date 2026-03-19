@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useAction, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
-import RTKClient from "@cloudflare/realtimekit"
+import { useRealtimeKitClient } from "@cloudflare/realtimekit-react"
+import type RTKClient from "@cloudflare/realtimekit"
 
 export type StudioStatus =
   | "idle"
@@ -21,10 +22,7 @@ export type StudioDevice = {
 export type UseStudioReturn = {
   status: StudioStatus
   error: string | null
-  videoEnabled: boolean
-  audioEnabled: boolean
-  localVideoTrack: MediaStreamTrack | null
-  localAudioTrack: MediaStreamTrack | null
+  client: RTKClient | undefined
   compositorStream: MediaStream | null
   cameras: StudioDevice[]
   microphones: StudioDevice[]
@@ -40,21 +38,19 @@ export type UseStudioReturn = {
 export function useStudio(): UseStudioReturn {
   const [status, setStatus] = useState<StudioStatus>("idle")
   const [error, setError] = useState<string | null>(null)
-  const [videoEnabled, setVideoEnabled] = useState(false)
-  const [audioEnabled, setAudioEnabled] = useState(false)
-  const [localVideoTrack, setLocalVideoTrack] = useState<MediaStreamTrack | null>(null)
-  const [localAudioTrack, setLocalAudioTrack] = useState<MediaStreamTrack | null>(null)
   const [compositorStream, setCompositorStream] = useState<MediaStream | null>(null)
   const [cameras, setCameras] = useState<StudioDevice[]>([])
   const [microphones, setMicrophones] = useState<StudioDevice[]>([])
 
-  const clientRef = useRef<RTKClient | null>(null)
+  const [meeting, initMeeting] = useRealtimeKitClient()
   const animFrameRef = useRef<number | null>(null)
+  const isActiveRef = useRef(false)
 
   const createSession = useAction(api.studio.createStudioSession)
   const endSessionAction = useAction(api.studio.endStudioSession)
 
-  // Fetch active session — used to restore state on page reload
+  // Subscribes to the active session record — will be used in Slice N to restore
+  // compositor state and stream background when the page reloads mid-session.
   useQuery(api.studio.getActiveSession)
 
   // ─── Device enumeration ───────────────────────────────────────────────────
@@ -73,11 +69,9 @@ export function useStudio(): UseStudioReturn {
     )
   }, [])
 
-  // ─── Canvas compositor scaffold ───────────────────────────────────────────
+  // ─── Canvas compositor ────────────────────────────────────────────────────
   // Draws the active video track onto a 1280×720 canvas at 30fps.
-  // The captureStream() output is the compositorStream that Slice 8 will
-  // push to Cloudflare Stream via RTMPS. Slice 5 will extend this to
-  // composite multiple participant tiles based on the chosen layout.
+  // Slice 5 will extend this to composite multiple participant tiles.
 
   const startCompositor = useCallback((videoTrack: MediaStreamTrack) => {
     if (animFrameRef.current !== null) {
@@ -112,29 +106,6 @@ export function useStudio(): UseStudioReturn {
     setCompositorStream(null)
   }, [])
 
-  // ─── Sync local state from client ─────────────────────────────────────────
-
-  const syncTrackState = useCallback(
-    (client: RTKClient) => {
-      const vEnabled = client.self.videoEnabled
-      const aEnabled = client.self.audioEnabled
-      const vTrack = client.self.videoTrack ?? null
-      const aTrack = client.self.audioTrack ?? null
-
-      setVideoEnabled(vEnabled)
-      setAudioEnabled(aEnabled)
-      setLocalVideoTrack(vEnabled ? vTrack : null)
-      setLocalAudioTrack(aEnabled ? aTrack : null)
-
-      if (vEnabled && vTrack) {
-        startCompositor(vTrack)
-      } else {
-        stopCompositor()
-      }
-    },
-    [startCompositor, stopCompositor],
-  )
-
   // ─── Session lifecycle ────────────────────────────────────────────────────
 
   const startSession = useCallback(async () => {
@@ -146,90 +117,100 @@ export function useStudio(): UseStudioReturn {
 
       setStatus("connecting")
 
-      const client = await RTKClient.init({ authToken })
+      const client = await initMeeting({ authToken })
+      if (!client) throw new Error("Failed to initialize RTK client")
+
       await client.join()
 
-      clientRef.current = client
-      syncTrackState(client)
+      // Keep compositor in sync with video track changes (e.g. device switch, remote mute)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(client.self as any).on("videoUpdate", () => {
+        if (client.self.videoEnabled && client.self.videoTrack) {
+          startCompositor(client.self.videoTrack)
+        } else {
+          stopCompositor()
+        }
+      })
+
+      // Bootstrap compositor if the preset auto-enables video on join
+      if (client.self.videoEnabled && client.self.videoTrack) {
+        startCompositor(client.self.videoTrack)
+      }
+
+      isActiveRef.current = true
       await refreshDevices()
       setStatus("connected")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start studio session")
       setStatus("error")
     }
-  }, [createSession, refreshDevices, syncTrackState])
+  }, [createSession, initMeeting, refreshDevices, startCompositor, stopCompositor])
 
   const endSession = useCallback(async () => {
-    const client = clientRef.current
-    if (client) {
-      await client.leaveRoom()
-      clientRef.current = null
+    try {
+      if (isActiveRef.current) {
+        if (meeting.self.videoEnabled) await meeting.self.disableVideo()
+        if (meeting.self.audioEnabled) await meeting.self.disableAudio()
+        await meeting.leaveRoom()
+      }
+    } finally {
+      isActiveRef.current = false
+      stopCompositor()
+      await endSessionAction({})
+      setStatus("idle")
     }
-    stopCompositor()
-    await endSessionAction({})
-    setLocalVideoTrack(null)
-    setLocalAudioTrack(null)
-    setVideoEnabled(false)
-    setAudioEnabled(false)
-    setStatus("idle")
-  }, [endSessionAction, stopCompositor])
+  }, [meeting, endSessionAction, stopCompositor])
 
   // ─── Track controls ───────────────────────────────────────────────────────
 
   const toggleVideo = useCallback(async () => {
-    const client = clientRef.current
-    if (!client) return
-    if (videoEnabled) {
-      await client.self.disableVideo()
+    if (!isActiveRef.current) return
+    if (meeting.self.videoEnabled) {
+      await meeting.self.disableVideo()
     } else {
-      await client.self.enableVideo()
+      await meeting.self.enableVideo()
     }
-    syncTrackState(client)
-  }, [videoEnabled, syncTrackState])
+  }, [meeting])
 
   const toggleAudio = useCallback(async () => {
-    const client = clientRef.current
-    if (!client) return
-    if (audioEnabled) {
-      await client.self.disableAudio()
+    if (!isActiveRef.current) return
+    if (meeting.self.audioEnabled) {
+      await meeting.self.disableAudio()
     } else {
-      await client.self.enableAudio()
+      await meeting.self.enableAudio()
     }
-    syncTrackState(client)
-  }, [audioEnabled, syncTrackState])
+  }, [meeting])
 
-  const switchCamera = useCallback(async (deviceId: string) => {
-    const client = clientRef.current
-    if (!client) return
-    const devices = await navigator.mediaDevices.enumerateDevices()
-    const device = devices.find((d) => d.deviceId === deviceId && d.kind === "videoinput")
-    if (device) {
-      await client.self.setDevice(device)
-      syncTrackState(client)
-    }
-  }, [syncTrackState])
+  const switchCamera = useCallback(
+    async (deviceId: string) => {
+      if (!isActiveRef.current) return
+      const device = cameras.find((d) => d.deviceId === deviceId)
+      if (device) await meeting.self.setDevice(device as MediaDeviceInfo)
+    },
+    [meeting, cameras],
+  )
 
-  const switchMicrophone = useCallback(async (deviceId: string) => {
-    const client = clientRef.current
-    if (!client) return
-    const devices = await navigator.mediaDevices.enumerateDevices()
-    const device = devices.find((d) => d.deviceId === deviceId && d.kind === "audioinput")
-    if (device) {
-      await client.self.setDevice(device)
-      syncTrackState(client)
-    }
-  }, [syncTrackState])
+  const switchMicrophone = useCallback(
+    async (deviceId: string) => {
+      if (!isActiveRef.current) return
+      const device = microphones.find((d) => d.deviceId === deviceId)
+      if (device) await meeting.self.setDevice(device as MediaDeviceInfo)
+    },
+    [meeting, microphones],
+  )
 
   const shareScreen = useCallback(async () => {
-    const client = clientRef.current
-    if (!client) return
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true })
-    const screenTrack = stream.getVideoTracks()[0]
-    if (screenTrack) {
-      await client.self.enableVideo(screenTrack)
-      syncTrackState(client)
+    if (!isActiveRef.current) return
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true })
+      const screenTrack = stream.getVideoTracks()[0]
+      if (screenTrack) await meeting.self.enableVideo(screenTrack)
+    } catch (err) {
+      // User cancelled the picker — not an error worth surfacing
+      if (err instanceof DOMException && err.name === "NotAllowedError") return
+      setError(err instanceof Error ? err.message : "Screen share failed")
     }
-  }, [syncTrackState])
+  }, [meeting])
 
   // ─── Cleanup on unmount ───────────────────────────────────────────────────
 
@@ -242,10 +223,7 @@ export function useStudio(): UseStudioReturn {
   return {
     status,
     error,
-    videoEnabled,
-    audioEnabled,
-    localVideoTrack,
-    localAudioTrack,
+    client: status === "connected" ? meeting : undefined,
     compositorStream,
     cameras,
     microphones,
