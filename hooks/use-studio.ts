@@ -62,6 +62,7 @@ export type UseStudioReturn = {
   endSession: () => Promise<void>
   guests: StudioGuest[]
   sessionId: Id<"studioSessions"> | null
+  sessionLoaded: boolean   // true once getActiveSession has resolved (even if null)
   generateInviteLink: () => Promise<string>
   admitGuest: (guestId: Id<"studioGuests">) => Promise<void>
   rejectGuest: (guestId: Id<"studioGuests">) => void
@@ -135,6 +136,7 @@ export function useStudio(): UseStudioReturn {
   const videoElCacheRef = useRef<Map<string, VideoElEntry>>(new Map())
   const animFrameRef = useRef<number | null>(null)
   const isActiveRef = useRef(false)
+  const hasAutoConnectedRef = useRef(false)
 
   const createSession = useAction(api.studio.createStudioSession)
   const endSessionAction = useAction(api.studio.endStudioSession)
@@ -251,15 +253,45 @@ export function useStudio(): UseStudioReturn {
       layout.slots.forEach((slotDef, i) => {
         const source = slots[i]
         if (!source) return
+
+        const x = Math.round(slotDef.x * 1280)
+        const y = Math.round(slotDef.y * 720)
+        const w = Math.round(slotDef.w * 1280)
+        const h = Math.round(slotDef.h * 720)
+
         const videoEl = getOrCreateVideoEl(videoElCacheRef.current, source)
-        if (!videoEl || videoEl.readyState < 2) return
-        ctx.drawImage(
-          videoEl,
-          Math.round(slotDef.x * 1280),
-          Math.round(slotDef.y * 720),
-          Math.round(slotDef.w * 1280),
-          Math.round(slotDef.h * 720),
-        )
+        if (videoEl && videoEl.readyState >= 2) {
+          ctx.drawImage(videoEl, x, y, w, h)
+        } else {
+          // Camera off — draw a name-plate placeholder so the slot isn't blank
+          ctx.fillStyle = "#27272a" // zinc-800
+          ctx.fillRect(x, y, w, h)
+
+          const initial = (source.label[0] ?? "?").toUpperCase()
+          const avatarR = Math.round(Math.min(w, h) * 0.15)
+          const cx = x + w / 2
+          const cy = y + h / 2
+
+          // Avatar circle
+          ctx.beginPath()
+          ctx.arc(cx, cy - avatarR * 0.3, avatarR, 0, Math.PI * 2)
+          ctx.fillStyle = "#3f3f46" // zinc-700
+          ctx.fill()
+
+          // Initial letter
+          ctx.fillStyle = "#d4d4d8" // zinc-300
+          ctx.font = `bold ${Math.round(avatarR)}px sans-serif`
+          ctx.textAlign = "center"
+          ctx.textBaseline = "middle"
+          ctx.fillText(initial, cx, cy - avatarR * 0.3)
+
+          // Name label at bottom
+          ctx.fillStyle = "#a1a1aa" // zinc-400
+          ctx.font = `${Math.round(h * 0.045)}px sans-serif`
+          ctx.textAlign = "center"
+          ctx.textBaseline = "middle"
+          ctx.fillText(source.label, cx, y + h * 0.82)
+        }
       })
 
       animFrameRef.current = requestAnimationFrame(draw)
@@ -295,52 +327,50 @@ export function useStudio(): UseStudioReturn {
 
   // ─── Session lifecycle ────────────────────────────────────────────────────
 
+  // ─── RTK connection ───────────────────────────────────────────────────────
+  // Shared by startSession (new session) and auto-reconnect (existing session).
+
+  const connectWithToken = useCallback(async (authToken: string) => {
+    setStatus("connecting")
+    const client = await initMeeting({ authToken })
+    if (!client) throw new Error("Failed to initialize RTK client")
+    await client.join()
+
+    rtkClientRef.current = client
+    isActiveRef.current = true
+
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    ;(client.self as any).on("videoUpdate", refreshSources)
+    ;(client.self as any).on("audioUpdate", refreshSources)
+    ;(client.self as any).on("screenShareUpdate", refreshSources)
+    ;(client.participants.joined as any).on("participantJoined", refreshSources)
+    ;(client.participants.joined as any).on("participantLeft", refreshSources)
+    ;(client.participants.joined as any).on("videoUpdate", refreshSources)
+    ;(client.participants.joined as any).on("audioUpdate", refreshSources)
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    refreshSources()
+    const selfCamera = sourcesRef.current.find((s) => s.id === `${client.self.id}:camera`) ?? null
+    const layout = STUDIO_LAYOUT_MAP[DEFAULT_LAYOUT_ID]
+    const initialSlots: (StudioSource | null)[] = layout.slots.map((_, i) => (i === 0 ? selfCamera : null))
+    setOnCanvasSlots(initialSlots)
+
+    startCompositorLoop()
+    await refreshDevices()
+    setStatus("connected")
+  }, [initMeeting, refreshSources, setOnCanvasSlots, startCompositorLoop, refreshDevices])
+
   const startSession = useCallback(async () => {
     try {
       setStatus("requesting-session")
       setError(null)
-
       const { authToken } = await createSession({})
-      setStatus("connecting")
-
-      const client = await initMeeting({ authToken })
-      if (!client) throw new Error("Failed to initialize RTK client")
-
-      await client.join()
-
-      rtkClientRef.current = client
-      isActiveRef.current = true
-
-      // RTK's TypeScript bindings don't expose .on() on self or participants;
-      // cast to any to access the underlying EventEmitter API.
-      /* eslint-disable @typescript-eslint/no-explicit-any */
-      ;(client.self as any).on("videoUpdate", refreshSources)
-      ;(client.self as any).on("audioUpdate", refreshSources)
-      ;(client.self as any).on("screenShareUpdate", refreshSources)
-
-      ;(client.participants as any).on("participantJoined", (participant: any) => {
-        ;(participant as any).on("videoUpdate", refreshSources)
-        ;(participant as any).on("audioUpdate", refreshSources)
-        refreshSources()
-      })
-      ;(client.participants as any).on("participantLeft", refreshSources)
-      /* eslint-enable @typescript-eslint/no-explicit-any */
-
-      // Build initial sources and place self camera in slot 0
-      refreshSources()
-      const selfCamera = sourcesRef.current.find((s) => s.id === `${client.self.id}:camera`) ?? null
-      const layout = STUDIO_LAYOUT_MAP[DEFAULT_LAYOUT_ID]
-      const initialSlots: (StudioSource | null)[] = layout.slots.map((_, i) => (i === 0 ? selfCamera : null))
-      setOnCanvasSlots(initialSlots)
-
-      startCompositorLoop()
-      await refreshDevices()
-      setStatus("connected")
+      await connectWithToken(authToken)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start studio session")
       setStatus("error")
     }
-  }, [createSession, initMeeting, refreshSources, setOnCanvasSlots, startCompositorLoop, refreshDevices])
+  }, [createSession, connectWithToken])
 
   const endSession = useCallback(async () => {
     const client = rtkClientRef.current
@@ -360,8 +390,24 @@ export function useStudio(): UseStudioReturn {
       setSources([])
       await endSessionAction({})
       setStatus("idle")
+      hasAutoConnectedRef.current = false
     }
   }, [endSessionAction, stopCompositorLoop, setOnCanvasSlots])
+
+  // Auto-reconnect when navigating to /studio/[sessionId] after a redirect from /studio.
+  // The redirect unmounts StudioView (leaveRoom fires), then HostSessionView mounts fresh.
+  // This effect re-joins using the session's stored creatorAuthToken from Convex.
+  // Also handles direct navigation (bookmark/reload) to /studio/[sessionId].
+  useEffect(() => {
+    if (status !== "idle") return
+    if (!activeSession?.creatorAuthToken) return
+    if (hasAutoConnectedRef.current) return
+    hasAutoConnectedRef.current = true
+    void connectWithToken(activeSession.creatorAuthToken).catch((err) => {
+      setError(err instanceof Error ? err.message : "Failed to reconnect to studio")
+      setStatus("error")
+    })
+  }, [status, activeSession, connectWithToken])
 
   // ─── Track controls ───────────────────────────────────────────────────────
 
@@ -490,6 +536,11 @@ export function useStudio(): UseStudioReturn {
 
   useEffect(() => {
     return () => {
+      if (isActiveRef.current && rtkClientRef.current) {
+        void rtkClientRef.current.leaveRoom().catch(() => {})
+        isActiveRef.current = false
+        rtkClientRef.current = null
+      }
       stopCompositorLoop()
     }
   }, [stopCompositorLoop])
@@ -515,6 +566,7 @@ export function useStudio(): UseStudioReturn {
     endSession,
     guests,
     sessionId: activeSession?._id ?? null,
+    sessionLoaded: activeSession !== undefined,
     generateInviteLink,
     admitGuest,
     rejectGuest,
