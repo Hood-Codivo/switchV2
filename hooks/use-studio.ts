@@ -1,12 +1,13 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { useAction, useQuery } from "convex/react"
+import { useAction, useMutation, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useRealtimeKitClient } from "@cloudflare/realtimekit-react"
 import type RTKClient from "@cloudflare/realtimekit"
 import { STUDIO_LAYOUT_MAP, DEFAULT_LAYOUT_ID } from "@/lib/studio-layouts"
 import type { LayoutConfig } from "@/lib/studio-layouts"
+import type { Id } from "@/convex/_generated/dataModel"
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -33,6 +34,13 @@ export type StudioSource = {
   isSelf: boolean
 }
 
+export type StudioGuest = {
+  _id: Id<"studioGuests">
+  displayName: string
+  status: "waiting" | "admitted" | "rejected" | "removed"
+  rtkAuthToken?: string
+}
+
 export type UseStudioReturn = {
   status: StudioStatus
   error: string | null
@@ -52,6 +60,12 @@ export type UseStudioReturn = {
   switchLayout: (layoutId: string) => void
   startSession: () => Promise<void>
   endSession: () => Promise<void>
+  guests: StudioGuest[]
+  sessionId: Id<"studioSessions"> | null
+  generateInviteLink: () => Promise<string>
+  admitGuest: (guestId: Id<"studioGuests">) => Promise<void>
+  rejectGuest: (guestId: Id<"studioGuests">) => void
+  removeGuest: (guestId: Id<"studioGuests">) => void
 }
 
 // ─── Video element cache ───────────────────────────────────────────────────────
@@ -124,10 +138,23 @@ export function useStudio(): UseStudioReturn {
 
   const createSession = useAction(api.studio.createStudioSession)
   const endSessionAction = useAction(api.studio.endStudioSession)
+  const generateInviteTokenMutation = useMutation(api.studio.generateInviteToken)
+  const admitGuestAction = useAction(api.studio.admitGuest)
+  const rejectGuestMutation = useMutation(api.studio.rejectGuest)
+  const removeGuestMutation = useMutation(api.studio.removeGuest)
 
   // Subscribes to the active session record — will be used to restore
   // compositor state and stream background when the page reloads mid-session.
-  useQuery(api.studio.getActiveSession)
+  const activeSession = useQuery(api.studio.getActiveSession)
+
+  // Subscribe to guests for the active session
+  const rawGuests = useQuery(
+    api.studio.listSessionGuests,
+    activeSession?._id ? { sessionId: activeSession._id } : "skip",
+  )
+  const guests: StudioGuest[] = (rawGuests ?? []).filter(
+    (g) => g.status === "waiting" || g.status === "admitted",
+  )
 
   // ─── Slot helpers ─────────────────────────────────────────────────────────
 
@@ -431,6 +458,34 @@ export function useStudio(): UseStudioReturn {
     [setOnCanvasSlots],
   )
 
+  // ─── Guest management ─────────────────────────────────────────────────────
+
+  const generateInviteLink = useCallback(async (): Promise<string> => {
+    const token = await generateInviteTokenMutation({})
+    return `${window.location.origin}/studio/join/${token}`
+  }, [generateInviteTokenMutation])
+
+  const admitGuest = useCallback(
+    async (guestId: Id<"studioGuests">) => {
+      await admitGuestAction({ guestId })
+    },
+    [admitGuestAction],
+  )
+
+  const rejectGuest = useCallback(
+    (guestId: Id<"studioGuests">) => {
+      void rejectGuestMutation({ guestId })
+    },
+    [rejectGuestMutation],
+  )
+
+  const removeGuest = useCallback(
+    (guestId: Id<"studioGuests">) => {
+      void removeGuestMutation({ guestId })
+    },
+    [removeGuestMutation],
+  )
+
   // ─── Cleanup on unmount ───────────────────────────────────────────────────
 
   useEffect(() => {
@@ -458,5 +513,11 @@ export function useStudio(): UseStudioReturn {
     switchLayout,
     startSession,
     endSession,
+    guests,
+    sessionId: activeSession?._id ?? null,
+    generateInviteLink,
+    admitGuest,
+    rejectGuest,
+    removeGuest,
   }
 }
