@@ -53,6 +53,7 @@ export type GuestStudioStatus =
   | "connecting"  // RTKClient.init + join in progress
   | "connected"   // in the meeting
   | "removed"     // host removed this guest
+  | "idle"        // guest voluntarily left
   | "error"
 
 export type UseGuestStudioReturn = {
@@ -455,6 +456,7 @@ export function useGuestStudio(guestId: Id<"studioGuests">): UseGuestStudioRetur
     await rtkClientRef.current.leaveRoom()
     rtkClientRef.current = null
     setClient(undefined)
+    setStatus("idle")
   }, [stopCompositorLoop])
 
   return {

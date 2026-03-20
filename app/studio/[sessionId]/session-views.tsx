@@ -114,6 +114,14 @@ export function GuestSessionView({
     )
   }
 
+  if (status === "idle") {
+    return (
+      <Shell>
+        <p className="font-medium text-zinc-300">You have left the studio.</p>
+      </Shell>
+    )
+  }
+
   if (status === "removed") {
     return (
       <Shell>
