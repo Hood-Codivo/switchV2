@@ -13,5 +13,5 @@ export default async function StudioSessionPage({
   if (guestId) {
     return <GuestSessionView sessionId={sessionId} guestId={guestId} />
   }
-  return <HostSessionView sessionId={sessionId} />
+  return <HostSessionView />
 }

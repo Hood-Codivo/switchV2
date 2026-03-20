@@ -18,7 +18,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   )
 }
 
-export function HostSessionView({ sessionId: _sessionId }: { sessionId: string }) {
+export function HostSessionView() {
   const studio = useStudio()
   const { status, error, client, sessionLoaded } = studio
 
