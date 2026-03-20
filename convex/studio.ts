@@ -62,6 +62,12 @@ export const endStudioSessionRecord = internalMutation({
       .first()
     if (!session) return
     await ctx.db.patch(session._id, { status: "ended" })
+
+    const messages = await ctx.db
+      .query("backstageMessages")
+      .withIndex("by_session", (q) => q.eq("sessionId", session._id))
+      .collect()
+    await Promise.all(messages.map((m) => ctx.db.delete(m._id)))
   },
 })
 
@@ -103,10 +109,10 @@ export const listSessionGuests = query({
   args: { sessionId: v.id("studioSessions") },
   handler: async (ctx, { sessionId }) => {
     const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    if (!userId) return []
 
     const session = await ctx.db.get(sessionId)
-    if (!session || session.creatorId !== userId) throw new Error("Not authorized")
+    if (!session || session.creatorId !== userId) return []
 
     return ctx.db
       .query("studioGuests")
@@ -123,6 +129,23 @@ export const listSessionGuests = query({
 // (on transition to "admitted") to initialize the RTK client.
 export const getGuestStatus = query({
   args: { guestId: v.id("studioGuests") },
+  returns: v.union(
+    v.object({
+      _id: v.id("studioGuests"),
+      _creationTime: v.number(),
+      sessionId: v.id("studioSessions"),
+      displayName: v.string(),
+      rtkAuthToken: v.optional(v.string()),
+      status: v.union(
+        v.literal("waiting"),
+        v.literal("admitted"),
+        v.literal("rejected"),
+        v.literal("removed"),
+      ),
+      createdAt: v.number(),
+    }),
+    v.null(),
+  ),
   handler: async (ctx, { guestId }) => {
     return ctx.db.get(guestId)
   },

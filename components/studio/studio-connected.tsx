@@ -1,7 +1,9 @@
 "use client"
 
-import { useState } from "react"
-import { Check, Copy, LogOut, MessageCircle, MessageSquare, Radio, UserMinus, Users } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { Check, Copy, LogOut, MessageCircle, MessageSquare, Radio, Send, UserMinus, Users } from "lucide-react"
+import { useMutation, useQuery } from "convex/react"
+import { api } from "@/convex/_generated/api"
 import { cn } from "@/lib/utils"
 import { STUDIO_LAYOUTS } from "@/lib/studio-layouts"
 import type { StudioSource, StudioDevice, StudioGuest } from "@/hooks/use-studio"
@@ -235,6 +237,91 @@ function PeoplePanel({
   )
 }
 
+// ─── Backstage chat panel ─────────────────────────────────────────────────────
+
+function BackstageChatPanel({
+  sessionId,
+  guestId,
+}: {
+  sessionId: Id<"studioSessions">
+  guestId?: Id<"studioGuests">
+}) {
+  const [draft, setDraft] = useState("")
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  const messages = useQuery(api.backstageChat.listBackstageMessages, { sessionId, guestId })
+  const sendMessage = useMutation(api.backstageChat.sendBackstageMessage)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages?.length])
+
+  async function handleSend() {
+    const content = draft.trim()
+    if (!content) return
+    setDraft("")
+    await sendMessage({ sessionId, content, guestId })
+  }
+
+  if (messages === undefined) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <div className="size-5 animate-spin rounded-full border-2 border-zinc-700 border-t-white" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-3">
+        {messages.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+            <MessageCircle className="size-8 text-zinc-700" />
+            <div>
+              <p className="text-sm font-medium text-zinc-500">Private Chat</p>
+              <p className="mt-1 text-xs leading-relaxed text-zinc-700">
+                Backstage chat with your guests.
+              </p>
+            </div>
+          </div>
+        ) : (
+          messages.map((msg) => (
+            <div key={msg._id} className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-medium text-zinc-500">
+                {msg.senderName}
+                {msg.senderType === "creator" && (
+                  <span className="ml-1 text-zinc-600">(host)</span>
+                )}
+              </span>
+              <p className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-200">
+                {msg.content}
+              </p>
+            </div>
+          ))
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      <div className="flex gap-2 border-t border-zinc-800 p-3">
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleSend() } }}
+          placeholder="Message…"
+          className="flex-1 rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:ring-1 focus:ring-zinc-600"
+        />
+        <button
+          onClick={() => void handleSend()}
+          disabled={!draft.trim()}
+          className="flex items-center justify-center rounded-lg bg-zinc-700 px-3 text-zinc-300 transition-colors hover:bg-zinc-600 disabled:opacity-40"
+        >
+          <Send className="size-3.5" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── StudioConnected ──────────────────────────────────────────────────────────
 
 type StudioConnectedProps = {
@@ -242,6 +329,8 @@ type StudioConnectedProps = {
   // Instead we accept an optional callback so use-studio can still
   // get the stream for meeting.self.setVideoTrack().
   onCompositorStream?: (stream: MediaStream | null) => void
+  sessionId: Id<"studioSessions">
+  guestId?: Id<"studioGuests">
   sources: StudioSource[]
   onCanvasSlots: (StudioSource | null)[]
   activeLayoutId: string
@@ -264,6 +353,8 @@ type StudioConnectedProps = {
 
 export function StudioConnected({
   onCompositorStream,
+  sessionId,
+  guestId,
   sources,
   onCanvasSlots,
   activeLayoutId,
@@ -385,7 +476,7 @@ export function StudioConnected({
             ))}
           </div>
 
-          {activeTab === "people" ? (
+          {activeTab === "people" && (
             <PeoplePanel
               guests={guests}
               generateInviteLink={generateInviteLink}
@@ -393,8 +484,12 @@ export function StudioConnected({
               rejectGuest={rejectGuest}
               removeGuest={removeGuest}
             />
-          ) : (
-            <SidebarEmpty tab={activeTab} />
+          )}
+          {activeTab === "chat" && (
+            <BackstageChatPanel sessionId={sessionId} guestId={guestId} />
+          )}
+          {activeTab === "comments" && (
+            <SidebarEmpty tab="comments" />
           )}
         </aside>
       </div>

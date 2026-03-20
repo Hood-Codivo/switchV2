@@ -73,6 +73,14 @@ export default defineSchema({
   })
     .index("by_session", ["sessionId"])
     .index("by_session_and_status", ["sessionId", "status"]),
+  backstageMessages: defineTable({
+    sessionId: v.id("studioSessions"),
+    senderType: v.union(v.literal("creator"), v.literal("guest")),
+    senderId: v.string(),   // userId for creator, guestId string for guest
+    senderName: v.string(), // display name at time of sending
+    content: v.string(),
+    createdAt: v.number(),
+  }).index("by_session", ["sessionId"]),
   follows: defineTable({
     followerId: v.id("users"),
     creatorId: v.id("users"),
