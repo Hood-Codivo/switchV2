@@ -90,19 +90,9 @@ export function GuestSessionView({
   const typedGuestId = guestId as Id<"studioGuests">
 
   const guestRecord = useQuery(api.studio.getGuestStatus, { guestId: typedGuestId })
-  const {
-    status,
-    error,
-    client,
-    cameras,
-    microphones,
-    toggleVideo,
-    toggleAudio,
-    switchCamera,
-    switchMicrophone,
-    toggleScreenShare,
-    leaveSession,
-  } = useGuestStudio(typedGuestId)
+  const guest = useGuestStudio(typedGuestId)
+  const { status, error, client, cameras, microphones, toggleVideo, toggleAudio,
+          switchCamera, switchMicrophone, toggleScreenShare, leaveSession } = guest
 
   // Note: useGuestStudio runs unconditionally (hooks can't be conditional) so RTK
   // init will be attempted even if the sessionId check below fails. This wastes one
@@ -157,10 +147,10 @@ export function GuestSessionView({
     <RealtimeKitProvider value={client}>
       <RtkParticipantsAudio />
       <StudioConnected
-        compositorStream={null}
-        sources={[]}
-        onCanvasSlots={[]}
-        activeLayoutId="solo"
+        compositorStream={guest.compositorStream}
+        sources={guest.sources}
+        onCanvasSlots={guest.onCanvasSlots}
+        activeLayoutId={guest.activeLayoutId}
         cameras={cameras}
         microphones={microphones}
         toggleVideo={toggleVideo}

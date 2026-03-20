@@ -52,6 +52,9 @@ export default defineSchema({
     inviteToken: v.optional(v.string()),
     inviteTokenExpiresAt: v.optional(v.number()),
     streamId: v.optional(v.id("streams")),
+    // Canvas stage sync — persisted so guests see the same composition as the host
+    stageParticipantIds: v.optional(v.array(v.string())), // RTK customParticipantId per canvas slot
+    stageLayoutId: v.optional(v.string()),
   })
     .index("by_creator", ["creatorId"])
     .index("by_creator_and_status", ["creatorId", "status"])

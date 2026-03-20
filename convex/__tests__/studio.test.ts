@@ -202,6 +202,24 @@ describe("generateInviteToken", () => {
     expect(session?.inviteTokenExpiresAt).toBeGreaterThan(Date.now())
   })
 
+  it("respects a custom expiresInHours argument", async () => {
+    const t = convexTest(schema, modules)
+    const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
+    await t.mutation(internal.studio.storeStudioSession, {
+      creatorId: userId as DataModel["studioSessions"]["document"]["creatorId"],
+      cloudflareRoomId: "cf-room-1",
+      creatorAuthToken: "token-1",
+    })
+
+    const before = Date.now()
+    await t.withIdentity({ subject: userId }).mutation(api.studio.generateInviteToken, { expiresInHours: 1 })
+    const session = await t.withIdentity({ subject: userId }).query(api.studio.getActiveSession, {})
+
+    const oneHourMs = 60 * 60 * 1000
+    expect(session?.inviteTokenExpiresAt).toBeGreaterThanOrEqual(before + oneHourMs)
+    expect(session?.inviteTokenExpiresAt).toBeLessThan(before + oneHourMs + 5_000)
+  })
+
   it("throws if there is no active session", async () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
@@ -498,6 +516,18 @@ describe("admitGuest", () => {
     const guest = await t.run(async (ctx) => ctx.db.get(guestId))
     expect(guest?.status).toBe("admitted")
     expect(guest?.rtkAuthToken).toBe("guest-rtk-token-abc")
+
+    // Verify the correct RTK API URL and auth header were used
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
+    expect(fetchMock).toHaveBeenCalledOnce()
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      "https://api.cloudflare.com/client/v4/accounts/test-account/realtime/kit/test-app/meetings/cf-room-1/participants",
+    )
+    expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer test-token")
+    const body = JSON.parse(init.body as string) as Record<string, unknown>
+    expect(body.custom_participant_id).toBe(guestId)
+    expect(body.preset_name).toBeUndefined()
   })
 
   it("throws when caller is not the session creator", async () => {

@@ -144,6 +144,38 @@ export const rejectGuest = mutation({
   },
 })
 
+// ─── Stage sync ──────────────────────────────────────────────────────────────
+
+// Host writes the current canvas state so guests can mirror it in real time.
+export const updateStage = mutation({
+  args: { stageParticipantIds: v.array(v.string()), stageLayoutId: v.string() },
+  handler: async (ctx, { stageParticipantIds, stageLayoutId }) => {
+    const userId = await getAuthUserId(ctx)
+    if (!userId) throw new Error("Not authenticated")
+    const session = await ctx.db
+      .query("studioSessions")
+      .withIndex("by_creator_and_status", (q) =>
+        q.eq("creatorId", userId).eq("status", "active"),
+      )
+      .first()
+    if (!session) return // session may have ended; silently ignore
+    await ctx.db.patch(session._id, { stageParticipantIds, stageLayoutId })
+  },
+})
+
+// Unauthenticated — guests need this to mirror the host's canvas without an account.
+export const getSessionStage = query({
+  args: { sessionId: v.id("studioSessions") },
+  handler: async (ctx, { sessionId }) => {
+    const session = await ctx.db.get(sessionId)
+    if (!session || session.status !== "active") return null
+    return {
+      stageParticipantIds: session.stageParticipantIds ?? [],
+      stageLayoutId: session.stageLayoutId ?? null,
+    }
+  },
+})
+
 export const removeGuest = mutation({
   args: { guestId: v.id("studioGuests") },
   handler: async (ctx, { guestId }): Promise<void> => {

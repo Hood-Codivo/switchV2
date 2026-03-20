@@ -26,6 +26,7 @@ export type StudioDevice = {
 
 export type StudioSource = {
   id: string
+  customParticipantId: string // RTK customParticipantId (= custom_participant_id set at token creation)
   type: "camera" | "screenshare"
   label: string
   track: MediaStreamTrack | null
@@ -144,6 +145,7 @@ export function useStudio(): UseStudioReturn {
   const admitGuestAction = useAction(api.studio.admitGuest)
   const rejectGuestMutation = useMutation(api.studio.rejectGuest)
   const removeGuestMutation = useMutation(api.studio.removeGuest)
+  const updateStageMutation = useMutation(api.studio.updateStage)
 
   // Subscribes to the active session record — will be used to restore
   // compositor state and stream background when the page reloads mid-session.
@@ -176,6 +178,7 @@ export function useStudio(): UseStudioReturn {
     // Self camera
     all.push({
       id: `${client.self.id}:camera`,
+      customParticipantId: client.self.customParticipantId,
       type: "camera",
       label: "You",
       track: client.self.videoTrack ?? null,
@@ -188,6 +191,7 @@ export function useStudio(): UseStudioReturn {
     if (client.self.screenShareEnabled) {
       all.push({
         id: `${client.self.id}:screen`,
+        customParticipantId: client.self.customParticipantId,
         type: "screenshare",
         label: "Your Screen",
         track: client.self.screenShareTracks?.video ?? null,
@@ -197,10 +201,13 @@ export function useStudio(): UseStudioReturn {
       })
     }
 
-    // Remote participants
+    // Remote participants (skip self if RTK includes the local peer in the joined map,
+    // and skip ghost connections from the host's own previous session)
     client.participants.joined.forEach((participant) => {
+      if (participant.customParticipantId === client.self.customParticipantId) return
       all.push({
         id: `${participant.id}:camera`,
+        customParticipantId: participant.customParticipantId ?? participant.id,
         type: "camera",
         label: participant.name || "Guest",
         track: participant.videoTrack ?? null,
@@ -355,10 +362,14 @@ export function useStudio(): UseStudioReturn {
     const initialSlots: (StudioSource | null)[] = layout.slots.map((_, i) => (i === 0 ? selfCamera : null))
     setOnCanvasSlots(initialSlots)
 
+    // Persist initial stage so guests immediately see the host on canvas
+    const initialParticipantIds = initialSlots.filter(Boolean).map((s) => s!.customParticipantId)
+    void updateStageMutation({ stageParticipantIds: initialParticipantIds, stageLayoutId: DEFAULT_LAYOUT_ID }).catch(() => {})
+
     startCompositorLoop()
     await refreshDevices()
     setStatus("connected")
-  }, [initMeeting, refreshSources, setOnCanvasSlots, startCompositorLoop, refreshDevices])
+  }, [initMeeting, refreshSources, setOnCanvasSlots, startCompositorLoop, refreshDevices, updateStageMutation])
 
   const startSession = useCallback(async () => {
     try {
@@ -487,8 +498,10 @@ export function useStudio(): UseStudioReturn {
       }
 
       setOnCanvasSlots(slots)
+      const participantIds = slots.filter(Boolean).map((s) => s!.customParticipantId)
+      void updateStageMutation({ stageParticipantIds: participantIds, stageLayoutId: activeLayoutRef.current.id }).catch(() => {})
     },
-    [setOnCanvasSlots],
+    [setOnCanvasSlots, updateStageMutation],
   )
 
   const switchLayout = useCallback(
@@ -500,8 +513,10 @@ export function useStudio(): UseStudioReturn {
       // Trim/pad slots to the new slot count
       const newSlots = layout.slots.map((_, i) => onCanvasSlotsRef.current[i] ?? null)
       setOnCanvasSlots(newSlots)
+      const participantIds = newSlots.filter(Boolean).map((s) => s!.customParticipantId)
+      void updateStageMutation({ stageParticipantIds: participantIds, stageLayoutId: layoutId }).catch(() => {})
     },
-    [setOnCanvasSlots],
+    [setOnCanvasSlots, updateStageMutation],
   )
 
   // ─── Guest management ─────────────────────────────────────────────────────
