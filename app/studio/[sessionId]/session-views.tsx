@@ -1,7 +1,5 @@
 "use client"
 
-import { useEffect } from "react"
-import { useRouter } from "next/navigation"
 import { RealtimeKitProvider } from "@cloudflare/realtimekit-react"
 import { RtkParticipantsAudio } from "@cloudflare/realtimekit-react-ui"
 import { useQuery } from "convex/react"
@@ -21,15 +19,19 @@ function Shell({ children }: { children: React.ReactNode }) {
 }
 
 export function HostSessionView({ sessionId: _sessionId }: { sessionId: string }) {
-  const router = useRouter()
   const studio = useStudio()
   const { status, error, client, sessionLoaded } = studio
 
-  useEffect(() => {
-    if (status === "idle" && sessionLoaded && studio.sessionId === null) {
-      router.replace("/studio")
-    }
-  }, [status, sessionLoaded, studio.sessionId, router])
+  if (status === "idle" && sessionLoaded && studio.sessionId === null) {
+    return (
+      <Shell>
+        <p className="text-sm text-zinc-400">No active studio session.</p>
+        <Link href="/studio" className="mt-2 text-sm text-zinc-400 underline">
+          Back to Studio
+        </Link>
+      </Shell>
+    )
+  }
 
   if (status === "error") {
     return (
@@ -86,7 +88,6 @@ export function GuestSessionView({
   guestId: string
 }) {
   const typedGuestId = guestId as Id<"studioGuests">
-  const typedSessionId = sessionId as Id<"studioSessions">
 
   const guestRecord = useQuery(api.studio.getGuestStatus, { guestId: typedGuestId })
   const {
@@ -115,7 +116,7 @@ export function GuestSessionView({
     )
   }
 
-  if (guestRecord === null || guestRecord.sessionId !== typedSessionId) {
+  if (guestRecord === null || guestRecord.sessionId !== sessionId) {
     return (
       <Shell>
         <p className="text-sm text-red-400">This invite link is not valid for this session.</p>
