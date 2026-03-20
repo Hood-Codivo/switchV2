@@ -60,6 +60,7 @@ export type UseGuestStudioReturn = {
   error: string | null
   client: RTKClient | undefined
   compositorStream: MediaStream | null
+  setCompositorStream: (stream: MediaStream | null) => void
   sources: StudioSource[]
   onCanvasSlots: (StudioSource | null)[]
   activeLayoutId: string
@@ -139,12 +140,26 @@ export function useGuestStudio(guestId: Id<"studioGuests">): UseGuestStudioRetur
       },
     ]
 
+    if (c.self.screenShareEnabled) {
+      allSources.push({
+        id: `${c.self.id}:screen`,
+        customParticipantId: c.self.customParticipantId,
+        type: "screenshare",
+        label: "Your Screen",
+        track: c.self.screenShareTracks?.video ?? null,
+        videoEnabled: true,
+        audioEnabled: false,
+        isSelf: true,
+      })
+    }
+
     // Skip self if RTK includes the local peer in the joined map
     c.participants.joined.forEach((p) => {
       if (p.customParticipantId === c.self.customParticipantId) return
+      const cpid = p.customParticipantId ?? p.id
       allSources.push({
         id: `${p.id}:camera`,
-        customParticipantId: p.customParticipantId ?? p.id,
+        customParticipantId: cpid,
         type: "camera",
         label: p.name || "Guest",
         track: p.videoTrack ?? null,
@@ -152,13 +167,32 @@ export function useGuestStudio(guestId: Id<"studioGuests">): UseGuestStudioRetur
         audioEnabled: p.audioEnabled,
         isSelf: false,
       })
+      // Surface remote screen share as a separate source
+      if (p.screenShareEnabled) {
+        allSources.push({
+          id: `${p.id}:screen`,
+          customParticipantId: cpid,
+          type: "screenshare",
+          label: `${p.name || "Guest"} Screen`,
+          track: p.screenShareTracks?.video ?? null,
+          videoEnabled: true,
+          audioEnabled: false,
+          isSelf: false,
+        })
+      }
     })
 
-    // Map stage slot order from Convex to actual source objects
+    // Map stage slot order from Convex to actual source objects.
+    // Stage entries are "customParticipantId:camera" or "customParticipantId:screen";
+    // bare customParticipantId (legacy) falls back to camera.
     const slots: (StudioSource | null)[] = layout.slots.map((_, i) => {
-      const cpid = cpids[i]
-      if (!cpid) return null
-      return allSources.find((s) => s.customParticipantId === cpid) ?? null
+      const entry = cpids[i]
+      if (!entry) return null
+      const colonIdx = entry.lastIndexOf(":")
+      const baseCpid = colonIdx !== -1 ? entry.slice(0, colonIdx) : entry
+      const typeHint = colonIdx !== -1 ? entry.slice(colonIdx + 1) : "camera"
+      const sourceType: StudioSource["type"] = typeHint === "screen" ? "screenshare" : "camera"
+      return allSources.find((s) => s.customParticipantId === baseCpid && s.type === sourceType) ?? null
     })
 
     // Keep slot references current (track changes, participant leaves)
@@ -291,10 +325,12 @@ export function useGuestStudio(guestId: Id<"studioGuests">): UseGuestStudioRetur
         /* eslint-disable @typescript-eslint/no-explicit-any */
         ;(rtkClient.self as any).on("videoUpdate", refreshCanvasFromStage)
         ;(rtkClient.self as any).on("audioUpdate", refreshCanvasFromStage)
+        ;(rtkClient.self as any).on("screenShareUpdate", refreshCanvasFromStage)
         ;(rtkClient.participants.joined as any).on("participantJoined", refreshCanvasFromStage)
         ;(rtkClient.participants.joined as any).on("participantLeft", refreshCanvasFromStage)
         ;(rtkClient.participants.joined as any).on("videoUpdate", refreshCanvasFromStage)
         ;(rtkClient.participants.joined as any).on("audioUpdate", refreshCanvasFromStage)
+        ;(rtkClient.participants.joined as any).on("screenShareUpdate", refreshCanvasFromStage)
         /* eslint-enable @typescript-eslint/no-explicit-any */
 
         // Enable camera then mic — user can adjust via controls if denied
@@ -426,6 +462,7 @@ export function useGuestStudio(guestId: Id<"studioGuests">): UseGuestStudioRetur
     error,
     client,
     compositorStream,
+    setCompositorStream,
     sources,
     onCanvasSlots,
     activeLayoutId,

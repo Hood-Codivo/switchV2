@@ -47,6 +47,7 @@ export type UseStudioReturn = {
   error: string | null
   client: RTKClient | undefined
   compositorStream: MediaStream | null
+  setCompositorStream: (stream: MediaStream | null) => void
   sources: StudioSource[]
   onCanvasSlots: (StudioSource | null)[]
   activeLayoutId: string
@@ -205,9 +206,10 @@ export function useStudio(): UseStudioReturn {
     // and skip ghost connections from the host's own previous session)
     client.participants.joined.forEach((participant) => {
       if (participant.customParticipantId === client.self.customParticipantId) return
+      const cpid = participant.customParticipantId ?? participant.id
       all.push({
         id: `${participant.id}:camera`,
-        customParticipantId: participant.customParticipantId ?? participant.id,
+        customParticipantId: cpid,
         type: "camera",
         label: participant.name || "Guest",
         track: participant.videoTrack ?? null,
@@ -215,6 +217,19 @@ export function useStudio(): UseStudioReturn {
         audioEnabled: participant.audioEnabled,
         isSelf: false,
       })
+      // Surface remote screen share as a separate source
+      if (participant.screenShareEnabled) {
+        all.push({
+          id: `${participant.id}:screen`,
+          customParticipantId: cpid,
+          type: "screenshare",
+          label: `${participant.name || "Guest"} Screen`,
+          track: participant.screenShareTracks?.video ?? null,
+          videoEnabled: true,
+          audioEnabled: false,
+          isSelf: false,
+        })
+      }
     })
 
     // Clean up video elements for departed sources
@@ -354,6 +369,7 @@ export function useStudio(): UseStudioReturn {
     ;(client.participants.joined as any).on("participantLeft", refreshSources)
     ;(client.participants.joined as any).on("videoUpdate", refreshSources)
     ;(client.participants.joined as any).on("audioUpdate", refreshSources)
+    ;(client.participants.joined as any).on("screenShareUpdate", refreshSources)
     /* eslint-enable @typescript-eslint/no-explicit-any */
 
     refreshSources()
@@ -362,8 +378,12 @@ export function useStudio(): UseStudioReturn {
     const initialSlots: (StudioSource | null)[] = layout.slots.map((_, i) => (i === 0 ? selfCamera : null))
     setOnCanvasSlots(initialSlots)
 
-    // Persist initial stage so guests immediately see the host on canvas
-    const initialParticipantIds = initialSlots.filter(Boolean).map((s) => s!.customParticipantId)
+    // Persist initial stage so guests immediately see the host on canvas.
+    // Each entry is "customParticipantId:camera" or "customParticipantId:screen"
+    // so guests can distinguish which track type belongs in each slot.
+    const initialParticipantIds = initialSlots.filter(Boolean).map((s) =>
+      `${s!.customParticipantId}:${s!.type === "screenshare" ? "screen" : "camera"}`
+    )
     void updateStageMutation({ stageParticipantIds: initialParticipantIds, stageLayoutId: DEFAULT_LAYOUT_ID }).catch(() => {})
 
     startCompositorLoop()
@@ -498,7 +518,9 @@ export function useStudio(): UseStudioReturn {
       }
 
       setOnCanvasSlots(slots)
-      const participantIds = slots.filter(Boolean).map((s) => s!.customParticipantId)
+      const participantIds = slots.filter(Boolean).map((s) =>
+        `${s!.customParticipantId}:${s!.type === "screenshare" ? "screen" : "camera"}`
+      )
       void updateStageMutation({ stageParticipantIds: participantIds, stageLayoutId: activeLayoutRef.current.id }).catch(() => {})
     },
     [setOnCanvasSlots, updateStageMutation],
@@ -513,7 +535,9 @@ export function useStudio(): UseStudioReturn {
       // Trim/pad slots to the new slot count
       const newSlots = layout.slots.map((_, i) => onCanvasSlotsRef.current[i] ?? null)
       setOnCanvasSlots(newSlots)
-      const participantIds = newSlots.filter(Boolean).map((s) => s!.customParticipantId)
+      const participantIds = newSlots.filter(Boolean).map((s) =>
+        `${s!.customParticipantId}:${s!.type === "screenshare" ? "screen" : "camera"}`
+      )
       void updateStageMutation({ stageParticipantIds: participantIds, stageLayoutId: layoutId }).catch(() => {})
     },
     [setOnCanvasSlots, updateStageMutation],
@@ -565,6 +589,7 @@ export function useStudio(): UseStudioReturn {
     error,
     client: status === "connected" ? meeting : undefined,
     compositorStream,
+    setCompositorStream,
     sources,
     onCanvasSlots,
     activeLayoutId,
