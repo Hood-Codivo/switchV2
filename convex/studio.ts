@@ -1,5 +1,5 @@
 import { v } from "convex/values"
-import { action, internalMutation, mutation, query } from "./_generated/server"
+import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server"
 import { getAuthUserId } from "@convex-dev/auth/server"
 import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
@@ -99,6 +99,62 @@ export const getSessionByInviteToken = query({
   },
 })
 
+export const listSessionGuests = query({
+  args: { sessionId: v.id("studioSessions") },
+  handler: async (ctx, { sessionId }) => {
+    const userId = await getAuthUserId(ctx)
+    if (!userId) throw new Error("Not authenticated")
+
+    const session = await ctx.db.get(sessionId)
+    if (!session || session.creatorId !== userId) throw new Error("Not authorized")
+
+    return ctx.db
+      .query("studioGuests")
+      .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+      .order("asc")
+      .collect()
+  },
+})
+
+export const getGuestStatus = query({
+  args: { guestId: v.id("studioGuests") },
+  handler: async (ctx, { guestId }) => {
+    return ctx.db.get(guestId)
+  },
+})
+
+export const rejectGuest = mutation({
+  args: { guestId: v.id("studioGuests") },
+  handler: async (ctx, { guestId }): Promise<void> => {
+    const userId = await getAuthUserId(ctx)
+    if (!userId) throw new Error("Not authenticated")
+
+    const guest = await ctx.db.get(guestId)
+    if (!guest) throw new Error("Guest not found")
+
+    const session = await ctx.db.get(guest.sessionId)
+    if (!session || session.creatorId !== userId) throw new Error("Not authorized")
+
+    await ctx.db.patch(guestId, { status: "rejected" })
+  },
+})
+
+export const removeGuest = mutation({
+  args: { guestId: v.id("studioGuests") },
+  handler: async (ctx, { guestId }): Promise<void> => {
+    const userId = await getAuthUserId(ctx)
+    if (!userId) throw new Error("Not authenticated")
+
+    const guest = await ctx.db.get(guestId)
+    if (!guest) throw new Error("Guest not found")
+
+    const session = await ctx.db.get(guest.sessionId)
+    if (!session || session.creatorId !== userId) throw new Error("Not authorized")
+
+    await ctx.db.patch(guestId, { status: "removed" })
+  },
+})
+
 export const requestGuestJoin = mutation({
   args: { token: v.string(), displayName: v.string() },
   handler: async (ctx, { token, displayName }): Promise<Id<"studioGuests">> => {
@@ -115,6 +171,26 @@ export const requestGuestJoin = mutation({
       status: "waiting",
       createdAt: Date.now(),
     })
+  },
+})
+
+// ─── Internal helpers ────────────────────────────────────────────────────────
+
+export const getGuestWithSession = internalQuery({
+  args: { guestId: v.id("studioGuests") },
+  handler: async (ctx, { guestId }) => {
+    const guest = await ctx.db.get(guestId)
+    if (!guest) return null
+    const session = await ctx.db.get(guest.sessionId)
+    if (!session) return null
+    return { ...guest, session }
+  },
+})
+
+export const admitGuestRecord = internalMutation({
+  args: { guestId: v.id("studioGuests"), rtkAuthToken: v.string() },
+  handler: async (ctx, { guestId, rtkAuthToken }): Promise<void> => {
+    await ctx.db.patch(guestId, { status: "admitted", rtkAuthToken })
   },
 })
 
@@ -188,6 +264,50 @@ export const endStudioSession = action({
 
     await ctx.runMutation(internal.studio.endStudioSessionRecord, {
       creatorId: userId as Id<"users">,
+    })
+  },
+})
+
+export const admitGuest = action({
+  args: { guestId: v.id("studioGuests") },
+  handler: async (ctx, { guestId }): Promise<void> => {
+    const userId = await getAuthUserId(ctx)
+    if (!userId) throw new Error("Not authenticated")
+
+    // Verify the caller owns the session this guest belongs to
+    const guest = await ctx.runQuery(internal.studio.getGuestWithSession, { guestId })
+    if (!guest) throw new Error("Guest not found")
+    if (guest.session.creatorId !== userId) throw new Error("Not authorized")
+
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN
+    const appId = process.env.CLOUDFLARE_REALTIMEKIT_APP_ID
+    if (!accountId || !apiToken || !appId) throw new Error("Cloudflare Realtime not configured")
+
+    const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/realtime/kit/${appId}`
+    const headers = { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" }
+
+    const res = await fetch(
+      `${baseUrl}/meetings/${guest.session.cloudflareRoomId}/participants`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          name: guest.displayName,
+          preset_name: "livestream_guest",
+          custom_participant_id: guestId,
+        }),
+      },
+    )
+    if (!res.ok) {
+      const body = await res.text()
+      throw new Error(`Failed to create guest participant: ${res.status} — ${body}`)
+    }
+    const { data } = (await res.json()) as { data: { token: string } }
+
+    await ctx.runMutation(internal.studio.admitGuestRecord, {
+      guestId,
+      rtkAuthToken: data.token,
     })
   },
 })
