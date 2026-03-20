@@ -329,7 +329,20 @@ describe("listSessionGuests", () => {
     expect(guests).toHaveLength(0)
   })
 
-  it("throws when caller is not the session creator", async () => {
+  it("returns empty array when called unauthenticated", async () => {
+    const t = convexTest(schema, modules)
+    const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
+    const sessionId = await t.mutation(internal.studio.storeStudioSession, {
+      creatorId: userId as DataModel["studioSessions"]["document"]["creatorId"],
+      cloudflareRoomId: "cf-room-1",
+      creatorAuthToken: "token-1",
+    })
+
+    const guests = await t.query(api.studio.listSessionGuests, { sessionId })
+    expect(guests).toEqual([])
+  })
+
+  it("returns empty array when caller is not the session creator", async () => {
     const t = convexTest(schema, modules)
     const alice = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const bob = await t.run(async (ctx) => seedUser(ctx, "bob"))
@@ -339,9 +352,8 @@ describe("listSessionGuests", () => {
       creatorAuthToken: "token-1",
     })
 
-    await expect(
-      t.withIdentity({ subject: bob }).query(api.studio.listSessionGuests, { sessionId }),
-    ).rejects.toThrow()
+    const guests = await t.withIdentity({ subject: bob }).query(api.studio.listSessionGuests, { sessionId })
+    expect(guests).toEqual([])
   })
 })
 
@@ -527,7 +539,7 @@ describe("admitGuest", () => {
     expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer test-token")
     const body = JSON.parse(init.body as string) as Record<string, unknown>
     expect(body.custom_participant_id).toBe(guestId)
-    expect(body.preset_name).toBeUndefined()
+    expect(body.preset_name).toBe("livestream_guest")
   })
 
   it("throws when caller is not the session creator", async () => {

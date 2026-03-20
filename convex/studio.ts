@@ -103,10 +103,10 @@ export const listSessionGuests = query({
   args: { sessionId: v.id("studioSessions") },
   handler: async (ctx, { sessionId }) => {
     const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    if (!userId) return []
 
     const session = await ctx.db.get(sessionId)
-    if (!session || session.creatorId !== userId) throw new Error("Not authorized")
+    if (!session || session.creatorId !== userId) return []
 
     return ctx.db
       .query("studioGuests")
