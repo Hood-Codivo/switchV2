@@ -1,11 +1,13 @@
 "use client"
 
+import { useEffect } from "react"
 import { RealtimeKitProvider } from "@cloudflare/realtimekit-react"
 import { RtkParticipantsAudio } from "@cloudflare/realtimekit-react-ui"
-import { useQuery } from "convex/react"
+import { useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useStudio } from "@/hooks/use-studio"
 import { useGuestStudio } from "@/hooks/use-guest-studio"
+import { useGoLive } from "@/hooks/use-go-live"
 import { StudioConnected } from "@/components/studio/studio-connected"
 import Link from "next/link"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -21,6 +23,19 @@ function Shell({ children }: { children: React.ReactNode }) {
 export function HostSessionView() {
   const studio = useStudio()
   const { status, error, client, sessionLoaded } = studio
+  const goLive = useGoLive(studio.sessionId, client)
+
+  // Keep lastHeartbeatAt fresh on the active studio session so that any future
+  // idle-session cleanup job can distinguish live sessions from abandoned ones.
+  const sendHeartbeat = useMutation(api.streams.heartbeat)
+  useEffect(() => {
+    if (status !== "connected") return
+    void sendHeartbeat({})
+    const interval = setInterval(() => { void sendHeartbeat({}) }, 30_000)
+    return () => clearInterval(interval)
+    // sendHeartbeat is a stable Convex mutation reference — omitted from deps intentionally.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status])
 
   if (status === "idle" && sessionLoaded && studio.sessionId === null) {
     return (
@@ -76,6 +91,12 @@ export function HostSessionView() {
         admitGuest={studio.admitGuest}
         rejectGuest={studio.rejectGuest}
         removeGuest={studio.removeGuest}
+        liveState={goLive.liveState}
+        viewerCount={goLive.viewerCount}
+        health={goLive.health}
+        onGoLive={goLive.goLive}
+        onEndStream={goLive.endStream}
+        isHost={true}
       />
     </RealtimeKitProvider>
   )
@@ -177,6 +198,12 @@ export function GuestSessionView({
         admitGuest={async (_id: Id<"studioGuests">) => {}}
         rejectGuest={(_id: Id<"studioGuests">) => {}}
         removeGuest={(_id: Id<"studioGuests">) => {}}
+        liveState={"idle" as const}
+        viewerCount={0}
+        health={null}
+        onGoLive={async () => {}}
+        onEndStream={async () => {}}
+        isHost={false}
       />
     </RealtimeKitProvider>
   )

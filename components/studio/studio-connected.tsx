@@ -1,15 +1,19 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Check, Copy, LogOut, MessageCircle, MessageSquare, Radio, Send, UserMinus, Users } from "lucide-react"
+import { Check, Copy, Loader2, LogOut, MessageCircle, MessageSquare, Radio, Send, UserMinus, Users } from "lucide-react"
 import { useMutation, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { cn } from "@/lib/utils"
 import { STUDIO_LAYOUTS } from "@/lib/studio-layouts"
 import type { StudioSource, StudioDevice, StudioGuest } from "@/hooks/use-studio"
 import type { Id } from "@/convex/_generated/dataModel"
+import type { GoLiveState, StreamHealth } from "@/hooks/use-go-live"
+import type { StreamCategory } from "@/convex/schema"
 import { StudioBottomBar } from "./studio-bottom-bar"
 import { StudioLayoutCanvas } from "./studio-layout-canvas"
+import { GoLiveModal } from "./go-live-modal"
+import { StreamHealthIndicator } from "./stream-health-indicator"
 
 // ─── Layout thumbnail ─────────────────────────────────────────────────────────
 
@@ -349,6 +353,12 @@ type StudioConnectedProps = {
   admitGuest: (guestId: Id<"studioGuests">) => Promise<void>
   rejectGuest: (guestId: Id<"studioGuests">) => void
   removeGuest: (guestId: Id<"studioGuests">) => void
+  liveState: GoLiveState
+  viewerCount: number
+  health: StreamHealth | null
+  onGoLive: (title: string, category: StreamCategory) => Promise<void>
+  onEndStream: () => Promise<void>
+  isHost: boolean
 }
 
 export function StudioConnected({
@@ -373,14 +383,17 @@ export function StudioConnected({
   admitGuest,
   rejectGuest,
   removeGuest,
+  liveState,
+  viewerCount,
+  health,
+  onGoLive,
+  onEndStream,
+  isHost,
 }: StudioConnectedProps) {
   const [activeTab, setActiveTab] = useState<SidebarTab>("people")
-
-  // Track whether we have a live compositor stream to enable Go Live
-  const [hasCompositorStream, setHasCompositorStream] = useState(false)
+  const [modalOpen, setModalOpen] = useState(false)
 
   function handleCompositorStream(stream: MediaStream | null) {
-    setHasCompositorStream(stream !== null)
     onCompositorStream?.(stream)
   }
 
@@ -392,16 +405,65 @@ export function StudioConnected({
         <div className="flex items-center gap-3">
           <span className="text-sm font-semibold">Studio</span>
           <div className="h-3.5 w-px bg-zinc-700" />
-          <span className="text-xs text-zinc-500">Not live</span>
+          {liveState === "idle" && (
+            <span className="text-xs text-zinc-500">Not live</span>
+          )}
+          {liveState === "starting" && (
+            <span className="text-xs text-zinc-500">Starting…</span>
+          )}
+          {liveState === "live" && (
+            <div className="flex items-center gap-3">
+              <span className="flex items-center gap-1 text-xs font-bold text-red-500">
+                <span className="size-1.5 animate-pulse rounded-full bg-red-500" />
+                LIVE
+              </span>
+              <div className="flex items-center gap-1 text-xs text-zinc-400">
+                <Users className="size-3" />
+                {viewerCount}
+              </div>
+              {health !== null && <StreamHealthIndicator health={health} />}
+            </div>
+          )}
+          {liveState === "ending" && (
+            <span className="text-xs text-zinc-500">Ending…</span>
+          )}
         </div>
         <div className="flex items-center gap-2">
-          <button
-            disabled
-            className="flex cursor-not-allowed items-center gap-1.5 rounded bg-red-600/25 px-3 py-1.5 text-xs font-semibold text-red-400 opacity-50"
-          >
-            <Radio className="size-3" />
-            Go Live
-          </button>
+          {liveState === "idle" && isHost && (
+            <button
+              onClick={() => setModalOpen(true)}
+              className="flex items-center gap-1.5 rounded bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-red-500"
+            >
+              <Radio className="size-3" />
+              Go Live
+            </button>
+          )}
+          {liveState === "starting" && (
+            <button
+              disabled
+              className="flex cursor-not-allowed items-center gap-1.5 rounded bg-red-600/50 px-3 py-1.5 text-xs font-semibold text-red-300 opacity-70"
+            >
+              <Loader2 className="size-3 animate-spin" />
+              Starting…
+            </button>
+          )}
+          {liveState === "live" && (
+            <button
+              onClick={() => void onEndStream()}
+              className="flex items-center gap-1.5 rounded bg-red-600/80 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-red-600"
+            >
+              End Stream
+            </button>
+          )}
+          {liveState === "ending" && (
+            <button
+              disabled
+              className="flex cursor-not-allowed items-center gap-1.5 rounded bg-zinc-700 px-3 py-1.5 text-xs font-semibold text-zinc-400 opacity-70"
+            >
+              <Loader2 className="size-3 animate-spin" />
+              Ending…
+            </button>
+          )}
           <button
             onClick={() => void endSession()}
             className="flex items-center gap-1.5 rounded bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700"
@@ -507,6 +569,19 @@ export function StudioConnected({
         toggleScreenShare={toggleScreenShare}
         toggleSourceOnCanvas={toggleSourceOnCanvas}
       />
+
+      {/* ── Go Live modal ────────────────────────────────────────────────── */}
+      {isHost && (
+        <GoLiveModal
+          open={modalOpen}
+          onClose={() => setModalOpen(false)}
+          onConfirm={async (title, category) => {
+            await onGoLive(title, category)
+            setModalOpen(false)
+          }}
+          isStarting={liveState === "starting"}
+        />
+      )}
     </div>
   )
 }

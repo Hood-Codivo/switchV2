@@ -26,23 +26,52 @@ export const categoryValidator = v.union(
   v.literal("Other"),
 )
 
+export const streamStatusValidator = v.union(
+  v.literal("idle"),
+  v.literal("starting"),
+  v.literal("live"),
+  v.literal("ended"),
+)
+
+// "ending" is intentionally absent — it exists only as local UI state in
+// use-go-live.ts (GoLiveState) and is never persisted to Convex.
+export type StreamStatus = "idle" | "starting" | "live" | "ended"
+
 export default defineSchema({
   ...authTables,
   streams: defineTable({
     creatorId: v.id("users"),
+    username: v.string(),
     title: v.string(),
     category: categoryValidator,
-    isLive: v.boolean(),
-    viewerCount: v.number(),
+    status: streamStatusValidator,
     playbackUrl: v.optional(v.string()),
+    rtkLivestreamId: v.optional(v.string()),
     startedAt: v.optional(v.number()),
+    endedAt: v.optional(v.number()),
+    viewerCount: v.number(),
+    peakViewerCount: v.number(),
   })
-    .index("by_is_live_and_viewer_count", ["isLive", "viewerCount"])
+    .index("by_status", ["status"])
     .index("by_creator", ["creatorId"])
+    .index("by_username", ["username"])
+    // Compound index for future queries that filter by both username and status.
+    // getByUsername still uses by_username + .filter(neq "ended") because
+    // Convex index ranges support equality/range predicates but not neq,
+    // and per-creator stream counts are small in practice.
+    .index("by_username_and_status", ["username", "status"])
     .searchIndex("search_title", {
       searchField: "title",
-      filterFields: ["isLive", "category"],
+      filterFields: ["status", "category"],
     }),
+  streamViewers: defineTable({
+    streamId: v.id("streams"),
+    sessionId: v.string(),
+    lastSeen: v.number(),
+  })
+    .index("by_stream", ["streamId"])
+    .index("by_session", ["sessionId"])
+    .index("by_last_seen", ["lastSeen"]),
   studioSessions: defineTable({
     creatorId: v.id("users"),
     cloudflareRoomId: v.string(),
@@ -55,6 +84,7 @@ export default defineSchema({
     // Canvas stage sync — persisted so guests see the same composition as the host
     stageParticipantIds: v.optional(v.array(v.string())), // "${customParticipantId}:camera" or "${customParticipantId}:screen" per slot
     stageLayoutId: v.optional(v.string()),
+    lastHeartbeatAt: v.optional(v.number()),
   })
     .index("by_creator", ["creatorId"])
     .index("by_creator_and_status", ["creatorId", "status"])

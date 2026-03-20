@@ -27,17 +27,19 @@ async function seedStream(
     creatorId: string
     title?: string
     category?: StreamCategory
-    isLive?: boolean
+    status?: "idle" | "starting" | "live" | "ended"
     viewerCount?: number
     playbackUrl?: string
   },
 ) {
   return ctx.db.insert("streams", {
     creatorId: overrides.creatorId as DataModel["streams"]["document"]["creatorId"],
+    username: "testuser",
     title: overrides.title ?? "Test Stream",
     category: overrides.category ?? "Gaming",
-    isLive: overrides.isLive ?? true,
+    status: overrides.status ?? "live",
     viewerCount: overrides.viewerCount ?? 0,
+    peakViewerCount: 0,
     playbackUrl: overrides.playbackUrl,
   })
 }
@@ -56,8 +58,8 @@ describe("streams.listLiveStreams", () => {
     await t.run(async (ctx) => {
       const aliceId = await seedUser(ctx, "alice")
       const bobId = await seedUser(ctx, "bob")
-      await seedStream(ctx, { creatorId: aliceId, title: "Live Now", isLive: true })
-      await seedStream(ctx, { creatorId: bobId, title: "Offline", isLive: false })
+      await seedStream(ctx, { creatorId: aliceId, title: "Live Now", status: "live" })
+      await seedStream(ctx, { creatorId: bobId, title: "Offline", status: "ended" })
     })
 
     const results = await t.query(api.streams.listLiveStreams, {

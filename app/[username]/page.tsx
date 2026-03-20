@@ -9,9 +9,12 @@ type Props = {
 
 export default async function ChannelPage({ params }: Props) {
   const { username } = await params
-  const data = await fetchQuery(api.follows.getChannelPage, { username })
+  const [data, stream] = await Promise.all([
+    fetchQuery(api.follows.getChannelPage, { username }),
+    fetchQuery(api.streams.getByUsername, { username }),
+  ])
 
   if (!data) notFound()
 
-  return <ChannelPageClient initialData={data} />
+  return <ChannelPageClient initialData={data} initialStream={stream ?? null} />
 }
