@@ -78,6 +78,11 @@ export function StudioView() {
         toggleSourceOnCanvas={studio.toggleSourceOnCanvas}
         switchLayout={studio.switchLayout}
         endSession={studio.endSession}
+        guests={studio.guests}
+        generateInviteLink={studio.generateInviteLink}
+        admitGuest={studio.admitGuest}
+        rejectGuest={studio.rejectGuest}
+        removeGuest={studio.removeGuest}
       />
     </RealtimeKitProvider>
   )
