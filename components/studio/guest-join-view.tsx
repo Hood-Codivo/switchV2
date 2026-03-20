@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useQuery, useMutation } from "convex/react"
 import { useRouter } from "next/navigation"
 import { api } from "@/convex/_generated/api"
@@ -57,6 +57,15 @@ export function GuestJoinView({ token }: { token: string }) {
 
   const tokenInfo = useQuery(api.studio.getSessionByInviteToken, { token })
   const requestJoin = useMutation(api.studio.requestGuestJoin)
+
+  const handleAdmitted = useCallback(
+    (sessionId: Id<"studioSessions">) => {
+      if (phase.step !== "waiting") return
+      router.push(`/studio/${sessionId}?guestId=${phase.guestId}`)
+    },
+    [phase, router],
+  )
+  const handleRejected = useCallback(() => setPhase({ step: "rejected" }), [])
 
   // Token still loading
   if (tokenInfo === undefined) {
@@ -144,8 +153,8 @@ export function GuestJoinView({ token }: { token: string }) {
       <Shell>
         <WaitingRoom
           guestId={guestId}
-          onAdmitted={(sessionId) => router.push(`/studio/${sessionId}?guestId=${guestId}`)}
-          onRejected={() => setPhase({ step: "rejected" })}
+          onAdmitted={handleAdmitted}
+          onRejected={handleRejected}
         />
       </Shell>
     )
