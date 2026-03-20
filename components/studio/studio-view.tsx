@@ -1,13 +1,21 @@
 "use client"
 
-import { RealtimeKitProvider } from "@cloudflare/realtimekit-react"
-import { RtkParticipantsAudio } from "@cloudflare/realtimekit-react-ui"
+import { useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { useStudio } from "@/hooks/use-studio"
-import { StudioConnected } from "./studio-connected"
 
 export function StudioView() {
   const studio = useStudio()
-  const { status, error, client, startSession } = studio
+  const { status, error, startSession } = studio
+  const router = useRouter()
+
+  // Once connected, hand off to /studio/[sessionId].
+  // StudioConnected is now rendered there, not here.
+  useEffect(() => {
+    if (studio.status === "connected" && studio.sessionId) {
+      router.push(`/studio/${studio.sessionId}`)
+    }
+  }, [studio.status, studio.sessionId, router])
 
   // ── Pre-join / connecting / error ───────────────────────────────────────────
 
@@ -57,28 +65,15 @@ export function StudioView() {
     )
   }
 
-  // ── Connected: wrap with RealtimeKit provider ───────────────────────────────
-  // RtkParticipantsAudio must live inside the provider — it plays remote audio.
+  // ── Connected: redirect in progress ──────────────────────────────────────────
+  // The useEffect above will redirect to /studio/[sessionId].
+  // Show a spinner while the navigation completes.
 
-  return (
-    <RealtimeKitProvider value={client}>
-      <RtkParticipantsAudio />
-      <StudioConnected
-        compositorStream={studio.compositorStream}
-        sources={studio.sources}
-        onCanvasSlots={studio.onCanvasSlots}
-        activeLayoutId={studio.activeLayoutId}
-        cameras={studio.cameras}
-        microphones={studio.microphones}
-        toggleVideo={studio.toggleVideo}
-        toggleAudio={studio.toggleAudio}
-        switchCamera={studio.switchCamera}
-        switchMicrophone={studio.switchMicrophone}
-        toggleScreenShare={studio.toggleScreenShare}
-        toggleSourceOnCanvas={studio.toggleSourceOnCanvas}
-        switchLayout={studio.switchLayout}
-        endSession={studio.endSession}
-      />
-    </RealtimeKitProvider>
-  )
+  if (status === "connected") {
+    return (
+      <div className="dark flex min-h-screen flex-col items-center justify-center bg-zinc-950 text-white">
+        <div className="size-7 animate-spin rounded-full border-2 border-zinc-700 border-t-white" />
+      </div>
+    )
+  }
 }
