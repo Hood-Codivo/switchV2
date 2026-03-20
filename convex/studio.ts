@@ -66,8 +66,8 @@ export const endStudioSessionRecord = internalMutation({
 })
 
 export const generateInviteToken = mutation({
-  args: {},
-  handler: async (ctx): Promise<string> => {
+  args: { expiresInHours: v.optional(v.number()) },
+  handler: async (ctx, { expiresInHours = 24 }): Promise<string> => {
     const userId = await getAuthUserId(ctx)
     if (!userId) throw new Error("Not authenticated")
 
@@ -80,7 +80,7 @@ export const generateInviteToken = mutation({
     if (!session) throw new Error("No active studio session")
 
     const token = crypto.randomUUID()
-    const expiresAt = Date.now() + 24 * 60 * 60 * 1000 // 24 hours
+    const expiresAt = Date.now() + expiresInHours * 60 * 60 * 1000
     await ctx.db.patch(session._id, { inviteToken: token, inviteTokenExpiresAt: expiresAt })
     return token
   },
@@ -116,6 +116,11 @@ export const listSessionGuests = query({
   },
 })
 
+// Security note: this query is intentionally unauthenticated — guests join
+// without an account so there's no identity to verify against. The guestId
+// (a Convex document ID, unguessable) acts as the sole credential, making it
+// safe to return rtkAuthToken here. The guest needs the token exactly once
+// (on transition to "admitted") to initialize the RTK client.
 export const getGuestStatus = query({
   args: { guestId: v.id("studioGuests") },
   handler: async (ctx, { guestId }) => {
@@ -198,7 +203,7 @@ export const admitGuestRecord = internalMutation({
 
 export const createStudioSession = action({
   args: {},
-  handler: async (ctx): Promise<{ authToken: string; roomId: string }> => {
+  handler: async (ctx): Promise<{ authToken: string; roomId: string; sessionId: Id<"studioSessions"> }> => {
     const userId = await getAuthUserId(ctx)
     if (!userId) throw new Error("Not authenticated")
 
@@ -227,14 +232,15 @@ export const createStudioSession = action({
     const meetingId = meetingBody.data.id
 
     // Create a participant token for the creator.
-    // preset_name selects the permissions preset — default presets are created
-    // automatically when you create the app in the Cloudflare dashboard.
+    // CLOUDFLARE_REALTIMEKIT_HOST_PRESET_ID is the UUID of the host preset from
+    // the Cloudflare RealtimeKit dashboard (Presets tab). If unset, the default
+    // preset is used which may have restricted permissions.
     const participantRes = await fetch(`${baseUrl}/meetings/${meetingId}/participants`, {
       method: "POST",
       headers,
       body: JSON.stringify({
         name: "Creator",
-        preset_name: "livestream_host",
+        preset_name: "livestream_host", 
         custom_participant_id: userId,
       }),
     })
@@ -246,13 +252,13 @@ export const createStudioSession = action({
     const participant = participantBody.data
 
     // Persist to DB via internalMutation
-    await ctx.runMutation(internal.studio.storeStudioSession, {
+    const sessionId = await ctx.runMutation(internal.studio.storeStudioSession, {
       creatorId: userId as Id<"users">,
       cloudflareRoomId: meetingId,
       creatorAuthToken: participant.token,
     })
 
-    return { authToken: participant.token, roomId: meetingId }
+    return { authToken: participant.token, roomId: meetingId, sessionId }
   },
 })
 
@@ -286,6 +292,9 @@ export const admitGuest = action({
 
     const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/realtime/kit/${appId}`
     const headers = { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" }
+
+    // CLOUDFLARE_REALTIMEKIT_GUEST_PRESET_ID is the UUID of the guest preset
+    // from the Cloudflare RealtimeKit dashboard (Presets tab).
 
     const res = await fetch(
       `${baseUrl}/meetings/${guest.session.cloudflareRoomId}/participants`,
