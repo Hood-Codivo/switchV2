@@ -1,26 +1,22 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useEffect, useState } from "react"
 import { useQuery, useMutation } from "convex/react"
-import { RealtimeKitProvider } from "@cloudflare/realtimekit-react"
-import { RtkMicToggle, RtkCameraToggle } from "@cloudflare/realtimekit-react-ui"
+import { useRouter } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import RTKClient from "@cloudflare/realtimekit"
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type JoinPhase =
   | { step: "enter-name" }
   | { step: "waiting"; guestId: Id<"studioGuests"> }
-  | { step: "admitted"; rtkClient: RTKClient; guestId: Id<"studioGuests"> }
   | { step: "rejected" }
-  | { step: "removed" }
   | { step: "error"; message: string }
 
-// ── Waiting room: subscribes to guest status via Convex ───────────────────────
-// useEffect is required here: Convex subscription change → side effect (RTK init).
-// Calling setPhase directly in render would be setState-during-render.
+// ── Waiting room ──────────────────────────────────────────────────────────────
+// Subscribes to the guest record via Convex and fires callbacks when the host
+// admits or rejects. useEffect is required: subscription change → side effect.
 
 function WaitingRoom({
   guestId,
@@ -28,18 +24,18 @@ function WaitingRoom({
   onRejected,
 }: {
   guestId: Id<"studioGuests">
-  onAdmitted: (rtkAuthToken: string) => void
+  onAdmitted: (sessionId: Id<"studioSessions">) => void
   onRejected: () => void
 }) {
   const guest = useQuery(api.studio.getGuestStatus, { guestId })
 
   useEffect(() => {
-    if (guest?.status === "admitted" && guest.rtkAuthToken) {
-      onAdmitted(guest.rtkAuthToken)
+    if (guest?.status === "admitted" && guest.sessionId) {
+      onAdmitted(guest.sessionId)
     } else if (guest?.status === "rejected") {
       onRejected()
     }
-  }, [guest?.status, guest?.rtkAuthToken, onAdmitted, onRejected])
+  }, [guest?.status, guest?.sessionId, onAdmitted, onRejected])
 
   return (
     <div className="flex flex-col items-center gap-4 text-center">
@@ -52,79 +48,17 @@ function WaitingRoom({
   )
 }
 
-// ── Admitted: RTK client active, guest controls ───────────────────────────────
-// Wraps content in RealtimeKitProvider so RtkMicToggle and RtkCameraToggle
-// can subscribe to RTK state internally — no manual audioEnabled tracking needed.
-// Removal detection still uses Convex subscription + useEffect (legitimate side effect).
-
-function AdmittedView({
-  client,
-  guestId,
-  onRemoved,
-}: {
-  client: RTKClient
-  guestId: Id<"studioGuests">
-  onRemoved: () => void
-}) {
-  const guest = useQuery(api.studio.getGuestStatus, { guestId })
-
-  // Detect removal via Convex subscription — leaveRoom is a side effect
-  useEffect(() => {
-    if (guest?.status === "removed") {
-      void client.leaveRoom().then(onRemoved)
-    }
-  }, [guest?.status, client, onRemoved])
-
-  if (guest?.status === "removed") {
-    return (
-      <div className="flex flex-col items-center gap-3 text-center">
-        <p className="font-medium">You have been removed from the studio.</p>
-      </div>
-    )
-  }
-
-  return (
-    <RealtimeKitProvider value={client}>
-      <div className="flex flex-col items-center gap-6">
-        <div>
-          <p className="text-lg font-semibold">You&apos;re live in the studio</p>
-          <p className="mt-1 text-sm text-zinc-400">The host can see and hear you.</p>
-        </div>
-        <div className="flex gap-3">
-          <RtkMicToggle />
-          <RtkCameraToggle />
-        </div>
-      </div>
-    </RealtimeKitProvider>
-  )
-}
-
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function GuestJoinView({ token }: { token: string }) {
+  const router = useRouter()
   const [phase, setPhase] = useState<JoinPhase>({ step: "enter-name" })
   const [displayName, setDisplayName] = useState("")
 
   const tokenInfo = useQuery(api.studio.getSessionByInviteToken, { token })
   const requestJoin = useMutation(api.studio.requestGuestJoin)
 
-  const handleAdmitted = useCallback(
-    async (rtkAuthToken: string, guestId: Id<"studioGuests">) => {
-      try {
-        const client = await RTKClient.init({ authToken: rtkAuthToken })
-        await client.join()
-        setPhase({ step: "admitted", rtkClient: client, guestId })
-      } catch (err) {
-        setPhase({
-          step: "error",
-          message: err instanceof Error ? err.message : "Failed to connect",
-        })
-      }
-    },
-    [],
-  )
-
-  // Token is still loading
+  // Token still loading
   if (tokenInfo === undefined) {
     return (
       <Shell>
@@ -162,14 +96,6 @@ export function GuestJoinView({ token }: { token: string }) {
     return (
       <Shell>
         <p className="font-medium">You were not admitted to the studio.</p>
-      </Shell>
-    )
-  }
-
-  if (phase.step === "removed") {
-    return (
-      <Shell>
-        <p className="font-medium">You have been removed from the studio.</p>
       </Shell>
     )
   }
@@ -218,20 +144,8 @@ export function GuestJoinView({ token }: { token: string }) {
       <Shell>
         <WaitingRoom
           guestId={guestId}
-          onAdmitted={(rtkAuthToken) => void handleAdmitted(rtkAuthToken, guestId)}
+          onAdmitted={(sessionId) => router.push(`/studio/${sessionId}?guestId=${guestId}`)}
           onRejected={() => setPhase({ step: "rejected" })}
-        />
-      </Shell>
-    )
-  }
-
-  if (phase.step === "admitted") {
-    return (
-      <Shell>
-        <AdmittedView
-          client={phase.rtkClient}
-          guestId={phase.guestId}
-          onRemoved={() => setPhase({ step: "removed" })}
         />
       </Shell>
     )
