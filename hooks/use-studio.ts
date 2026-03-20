@@ -389,8 +389,8 @@ export function useStudio(): UseStudioReturn {
       setOnCanvasSlots([null, null])
       setSources([])
       await endSessionAction({})
-      setStatus("idle")
       hasAutoConnectedRef.current = false
+      setStatus("idle")
     }
   }, [endSessionAction, stopCompositorLoop, setOnCanvasSlots])
 
