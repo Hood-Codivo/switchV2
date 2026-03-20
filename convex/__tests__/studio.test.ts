@@ -219,3 +219,99 @@ describe("generateInviteToken", () => {
     ).rejects.toThrow()
   })
 })
+
+describe("getSessionByInviteToken", () => {
+  it("returns session info for a valid, unexpired token", async () => {
+    const t = convexTest(schema, modules)
+    const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
+    const sessionId = await t.mutation(internal.studio.storeStudioSession, {
+      creatorId: userId as DataModel["studioSessions"]["document"]["creatorId"],
+      cloudflareRoomId: "cf-room-1",
+      creatorAuthToken: "token-1",
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sessionId, {
+        inviteToken: "valid-token",
+        inviteTokenExpiresAt: Date.now() + 60_000,
+      })
+    })
+
+    const result = await t.query(api.studio.getSessionByInviteToken, { token: "valid-token" })
+    expect(result?.sessionId).toBe(sessionId)
+    expect(result?.expired).toBe(false)
+  })
+
+  it("returns expired:true for an expired token", async () => {
+    const t = convexTest(schema, modules)
+    const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
+    const sessionId = await t.mutation(internal.studio.storeStudioSession, {
+      creatorId: userId as DataModel["studioSessions"]["document"]["creatorId"],
+      cloudflareRoomId: "cf-room-1",
+      creatorAuthToken: "token-1",
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sessionId, {
+        inviteToken: "expired-token",
+        inviteTokenExpiresAt: Date.now() - 1,
+      })
+    })
+
+    const result = await t.query(api.studio.getSessionByInviteToken, { token: "expired-token" })
+    expect(result?.expired).toBe(true)
+  })
+
+  it("returns null for an unknown token", async () => {
+    const t = convexTest(schema, modules)
+    const result = await t.query(api.studio.getSessionByInviteToken, { token: "unknown" })
+    expect(result).toBeNull()
+  })
+})
+
+describe("requestGuestJoin", () => {
+  it("creates a waiting guest record and returns its id", async () => {
+    const t = convexTest(schema, modules)
+    const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
+    const sessionId = await t.mutation(internal.studio.storeStudioSession, {
+      creatorId: userId as DataModel["studioSessions"]["document"]["creatorId"],
+      cloudflareRoomId: "cf-room-1",
+      creatorAuthToken: "token-1",
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sessionId, {
+        inviteToken: "valid-token",
+        inviteTokenExpiresAt: Date.now() + 60_000,
+      })
+    })
+
+    const guestId = await t.mutation(api.studio.requestGuestJoin, {
+      token: "valid-token",
+      displayName: "Bob",
+    })
+
+    expect(guestId).toBeDefined()
+
+    const guest = await t.run(async (ctx) => ctx.db.get(guestId))
+    expect(guest?.status).toBe("waiting")
+    expect(guest?.displayName).toBe("Bob")
+  })
+
+  it("throws for an expired token", async () => {
+    const t = convexTest(schema, modules)
+    const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
+    const sessionId = await t.mutation(internal.studio.storeStudioSession, {
+      creatorId: userId as DataModel["studioSessions"]["document"]["creatorId"],
+      cloudflareRoomId: "cf-room-1",
+      creatorAuthToken: "token-1",
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sessionId, {
+        inviteToken: "expired-token",
+        inviteTokenExpiresAt: Date.now() - 1,
+      })
+    })
+
+    await expect(
+      t.mutation(api.studio.requestGuestJoin, { token: "expired-token", displayName: "Bob" }),
+    ).rejects.toThrow("expired")
+  })
+})

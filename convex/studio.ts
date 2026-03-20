@@ -86,6 +86,38 @@ export const generateInviteToken = mutation({
   },
 })
 
+export const getSessionByInviteToken = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }): Promise<{ sessionId: Id<"studioSessions">; expired: boolean } | null> => {
+    const session = await ctx.db
+      .query("studioSessions")
+      .withIndex("by_invite_token", (q) => q.eq("inviteToken", token))
+      .first()
+    if (!session) return null
+    const expired = (session.inviteTokenExpiresAt ?? 0) < Date.now()
+    return { sessionId: session._id, expired }
+  },
+})
+
+export const requestGuestJoin = mutation({
+  args: { token: v.string(), displayName: v.string() },
+  handler: async (ctx, { token, displayName }): Promise<Id<"studioGuests">> => {
+    const session = await ctx.db
+      .query("studioSessions")
+      .withIndex("by_invite_token", (q) => q.eq("inviteToken", token))
+      .first()
+    if (!session) throw new Error("Invalid invite token")
+    if ((session.inviteTokenExpiresAt ?? 0) < Date.now()) throw new Error("Invite token has expired")
+
+    return ctx.db.insert("studioGuests", {
+      sessionId: session._id,
+      displayName: displayName.trim().slice(0, 40),
+      status: "waiting",
+      createdAt: Date.now(),
+    })
+  },
+})
+
 // ─── Actions (call external Cloudflare Realtime API) ────────────────────────
 
 export const createStudioSession = action({
