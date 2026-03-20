@@ -57,6 +57,7 @@ export function HostSessionView() {
       <RtkParticipantsAudio />
       <StudioConnected
         onCompositorStream={studio.setCompositorStream}
+        sessionId={studio.sessionId!}
         sources={studio.sources}
         onCanvasSlots={studio.onCanvasSlots}
         activeLayoutId={studio.activeLayoutId}
@@ -156,6 +157,8 @@ export function GuestSessionView({
       <RtkParticipantsAudio />
       <StudioConnected
         onCompositorStream={guest.setCompositorStream}
+        sessionId={guestRecord.sessionId}
+        guestId={typedGuestId}
         sources={guest.sources}
         onCanvasSlots={guest.onCanvasSlots}
         activeLayoutId={guest.activeLayoutId}

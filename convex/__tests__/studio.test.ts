@@ -169,6 +169,44 @@ describe("endStudioSessionRecord", () => {
     expect(result).toBeNull()
   })
 
+  it("deletes all backstage messages for the session", async () => {
+    const t = convexTest(schema, modules)
+    const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
+
+    const sessionId = await t.run(async (ctx) =>
+      ctx.db.insert("studioSessions", {
+        creatorId: userId as DataModel["studioSessions"]["document"]["creatorId"],
+        cloudflareRoomId: "cf-room-1",
+        creatorAuthToken: "token-1",
+        status: "active",
+        createdAt: Date.now(),
+      }),
+    )
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert("backstageMessages", {
+        sessionId,
+        senderType: "creator",
+        senderId: userId,
+        senderName: "alice",
+        content: "hello",
+        createdAt: Date.now(),
+      })
+    })
+
+    await t.mutation(internal.studio.endStudioSessionRecord, {
+      creatorId: userId as DataModel["studioSessions"]["document"]["creatorId"],
+    })
+
+    const remaining = await t.run(async (ctx) =>
+      ctx.db
+        .query("backstageMessages")
+        .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+        .collect(),
+    )
+    expect(remaining).toHaveLength(0)
+  })
+
   it("is a no-op when there is no active session", async () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
