@@ -1,157 +1,121 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef } from "react"
 import { LogOut, MessageCircle, MessageSquare, Radio, Users } from "lucide-react"
+import { useState } from "react"
 import { cn } from "@/lib/utils"
-import type { StudioDevice } from "@/hooks/use-studio"
+import { STUDIO_LAYOUTS } from "@/lib/studio-layouts"
+import type { StudioSource, StudioDevice } from "@/hooks/use-studio"
 import { StudioBottomBar } from "./studio-bottom-bar"
 
-// ─── Video element ────────────────────────────────────────────────────────────
-// useEffect is required: setting srcObject is an imperative browser API
-// with no declarative React equivalent (Canvas/WebRTC exception in CLAUDE.md).
+// ─── Canvas preview video element ────────────────────────────────────────────
+// useEffect is required: setting srcObject is an imperative browser API.
 
-function VideoEl({
-  source,
-  className,
-}: {
-  source: MediaStream | null | undefined
-  className?: string
-}) {
+function CompositorPreview({ stream }: { stream: MediaStream | null | undefined }) {
   const ref = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
     if (!ref.current) return
-    ref.current.srcObject = source ?? null
-    if (source) void ref.current.play().catch(() => {})
-  }, [source])
+    ref.current.srcObject = stream ?? null
+    if (stream) void ref.current.play().catch(() => {})
+  }, [stream])
 
-  return <video ref={ref} muted autoPlay playsInline className={className} />
+  return <video ref={ref} muted autoPlay playsInline className="size-full object-cover" />
 }
 
-// ─── Layout preset thumbnails ─────────────────────────────────────────────────
+// ─── Layout thumbnail ─────────────────────────────────────────────────────────
 
-const LAYOUTS = [
-  {
-    id: "solo",
-    label: "Solo",
-    svg: (c: string) => (
-      <rect x="1" y="1" width="26" height="16" rx="1.5" fill={c} opacity="0.75" />
-    ),
-  },
-  {
-    id: "side-by-side",
-    label: "Side by side",
-    svg: (c: string) => (
-      <>
-        <rect x="1" y="1" width="12" height="16" rx="1.5" fill={c} opacity="0.75" />
-        <rect x="15" y="1" width="12" height="16" rx="1.5" fill={c} opacity="0.75" />
-      </>
-    ),
-  },
-  {
-    id: "spotlight",
-    label: "Spotlight",
-    svg: (c: string) => (
-      <>
-        <rect x="1" y="1" width="18" height="16" rx="1.5" fill={c} opacity="0.75" />
-        <rect x="21" y="1" width="6" height="7" rx="1" fill={c} opacity="0.5" />
-        <rect x="21" y="10" width="6" height="7" rx="1" fill={c} opacity="0.5" />
-      </>
-    ),
-  },
-  {
-    id: "grid",
-    label: "Grid",
-    svg: (c: string) => (
-      <>
-        <rect x="1" y="1" width="12" height="7" rx="1" fill={c} opacity="0.75" />
-        <rect x="15" y="1" width="12" height="7" rx="1" fill={c} opacity="0.75" />
-        <rect x="1" y="10" width="12" height="7" rx="1" fill={c} opacity="0.75" />
-        <rect x="15" y="10" width="12" height="7" rx="1" fill={c} opacity="0.75" />
-      </>
-    ),
-  },
-  {
-    id: "pip-br",
-    label: "PiP Bottom Right",
-    svg: (c: string) => (
-      <>
-        <rect x="1" y="1" width="26" height="16" rx="1.5" fill={c} opacity="0.35" />
-        <rect x="17" y="10" width="9" height="6" rx="1" fill={c} opacity="0.9" />
-      </>
-    ),
-  },
-  {
-    id: "pip-bl",
-    label: "PiP Bottom Left",
-    svg: (c: string) => (
-      <>
-        <rect x="1" y="1" width="26" height="16" rx="1.5" fill={c} opacity="0.35" />
-        <rect x="2" y="10" width="9" height="6" rx="1" fill={c} opacity="0.9" />
-      </>
-    ),
-  },
-  {
-    id: "sidebar-r",
-    label: "Sidebar Right",
-    svg: (c: string) => (
-      <>
-        <rect x="1" y="1" width="17" height="16" rx="1.5" fill={c} opacity="0.75" />
-        <rect x="20" y="1" width="7" height="4.5" rx="1" fill={c} opacity="0.5" />
-        <rect x="20" y="6.75" width="7" height="4.5" rx="1" fill={c} opacity="0.5" />
-        <rect x="20" y="12.5" width="7" height="4.5" rx="1" fill={c} opacity="0.5" />
-      </>
-    ),
-  },
-  {
-    id: "fullscreen",
-    label: "Fullscreen",
-    svg: (c: string) => (
-      <rect x="0" y="0" width="28" height="18" rx="1.5" fill={c} opacity="0.75" />
-    ),
-  },
-]
+// SVG thumbnail renderers for the layout picker.
+// Keys MUST match the ids in STUDIO_LAYOUTS (lib/studio-layouts.ts).
+// If you add a layout there without a matching entry here, LayoutThumb returns
+// null and the new layout silently disappears from the picker.
+const LAYOUT_SVGS: Record<string, (c: string) => React.ReactNode> = {
+  solo: (c) => <rect x="1" y="1" width="26" height="16" rx="1.5" fill={c} opacity="0.75" />,
+  "side-by-side": (c) => (
+    <>
+      <rect x="1" y="1" width="12" height="16" rx="1.5" fill={c} opacity="0.75" />
+      <rect x="15" y="1" width="12" height="16" rx="1.5" fill={c} opacity="0.75" />
+    </>
+  ),
+  spotlight: (c) => (
+    <>
+      <rect x="1" y="1" width="18" height="16" rx="1.5" fill={c} opacity="0.75" />
+      <rect x="21" y="1" width="6" height="7" rx="1" fill={c} opacity="0.5" />
+      <rect x="21" y="10" width="6" height="7" rx="1" fill={c} opacity="0.5" />
+    </>
+  ),
+  grid: (c) => (
+    <>
+      <rect x="1" y="1" width="12" height="7" rx="1" fill={c} opacity="0.75" />
+      <rect x="15" y="1" width="12" height="7" rx="1" fill={c} opacity="0.75" />
+      <rect x="1" y="10" width="12" height="7" rx="1" fill={c} opacity="0.75" />
+      <rect x="15" y="10" width="12" height="7" rx="1" fill={c} opacity="0.75" />
+    </>
+  ),
+  "pip-br": (c) => (
+    <>
+      <rect x="1" y="1" width="26" height="16" rx="1.5" fill={c} opacity="0.35" />
+      <rect x="17" y="10" width="9" height="6" rx="1" fill={c} opacity="0.9" />
+    </>
+  ),
+  "pip-bl": (c) => (
+    <>
+      <rect x="1" y="1" width="26" height="16" rx="1.5" fill={c} opacity="0.35" />
+      <rect x="2" y="10" width="9" height="6" rx="1" fill={c} opacity="0.9" />
+    </>
+  ),
+  "sidebar-r": (c) => (
+    <>
+      <rect x="1" y="1" width="17" height="16" rx="1.5" fill={c} opacity="0.75" />
+      <rect x="20" y="1" width="7" height="4.5" rx="1" fill={c} opacity="0.5" />
+      <rect x="20" y="6.75" width="7" height="4.5" rx="1" fill={c} opacity="0.5" />
+      <rect x="20" y="12.5" width="7" height="4.5" rx="1" fill={c} opacity="0.5" />
+    </>
+  ),
+  fullscreen: (c) => (
+    <rect x="0" y="0" width="28" height="18" rx="1.5" fill={c} opacity="0.75" />
+  ),
+}
 
-function LayoutThumb({ id, label, active }: { id: string; label: string; active: boolean }) {
-  const layout = LAYOUTS.find((l) => l.id === id)
-  if (!layout) return null
+function LayoutThumb({
+  id,
+  label,
+  active,
+  onClick,
+}: {
+  id: string
+  label: string
+  active: boolean
+  onClick: () => void
+}) {
+  const svgFn = LAYOUT_SVGS[id]
+  if (!svgFn) return null
   const color = active ? "white" : "#71717a"
   return (
     <button
       title={label}
+      onClick={onClick}
       className={cn(
         "flex h-8 w-11 items-center justify-center rounded transition-all",
         active ? "bg-zinc-700 ring-1 ring-zinc-500" : "hover:bg-zinc-800",
       )}
     >
       <svg viewBox="0 0 28 18" className="h-4 w-[28px]" fill="none">
-        {layout.svg(color)}
+        {svgFn(color)}
       </svg>
     </button>
   )
 }
 
-// ─── Sidebar tab empty state ──────────────────────────────────────────────────
+// ─── Sidebar empty state ──────────────────────────────────────────────────────
 
 type SidebarTab = "comments" | "chat" | "people"
 
 function SidebarEmpty({ tab }: { tab: SidebarTab }) {
   const config = {
-    comments: {
-      icon: <MessageSquare className="size-8 text-zinc-700" />,
-      title: "Comments",
-      body: "Viewer comments appear here once you go live.",
-    },
-    chat: {
-      icon: <MessageCircle className="size-8 text-zinc-700" />,
-      title: "Private Chat",
-      body: "Backstage chat with your guests.",
-    },
-    people: {
-      icon: <Users className="size-8 text-zinc-700" />,
-      title: "People",
-      body: "Guests will appear here after joining via invite.",
-    },
+    comments: { icon: <MessageSquare className="size-8 text-zinc-700" />, title: "Comments", body: "Viewer comments appear here once you go live." },
+    chat: { icon: <MessageCircle className="size-8 text-zinc-700" />, title: "Private Chat", body: "Backstage chat with your guests." },
+    people: { icon: <Users className="size-8 text-zinc-700" />, title: "People", body: "Guests will appear here after joining via invite." },
   }[tab]
 
   return (
@@ -169,28 +133,37 @@ function SidebarEmpty({ tab }: { tab: SidebarTab }) {
 
 type StudioConnectedProps = {
   compositorStream: MediaStream | null
+  sources: StudioSource[]
+  onCanvasSlots: (StudioSource | null)[]
+  activeLayoutId: string
   cameras: StudioDevice[]
   microphones: StudioDevice[]
   toggleVideo: () => Promise<void>
   toggleAudio: () => Promise<void>
   switchCamera: (deviceId: string) => Promise<void>
   switchMicrophone: (deviceId: string) => Promise<void>
-  shareScreen: () => Promise<void>
+  toggleScreenShare: () => Promise<void>
+  toggleSourceOnCanvas: (sourceId: string) => void
+  switchLayout: (layoutId: string) => void
   endSession: () => Promise<void>
 }
 
 export function StudioConnected({
   compositorStream,
+  sources,
+  onCanvasSlots,
+  activeLayoutId,
   cameras,
   microphones,
   toggleVideo,
   toggleAudio,
   switchCamera,
   switchMicrophone,
-  shareScreen,
+  toggleScreenShare,
+  toggleSourceOnCanvas,
+  switchLayout,
   endSession,
 }: StudioConnectedProps) {
-  const [activeLayout, setActiveLayout] = useState("side-by-side")
   const [activeTab, setActiveTab] = useState<SidebarTab>("people")
 
   return (
@@ -228,7 +201,7 @@ export function StudioConnected({
             <div className="w-full max-w-4xl">
               <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-zinc-900 shadow-2xl ring-1 ring-white/5">
                 {compositorStream ? (
-                  <VideoEl source={compositorStream} className="size-full object-cover" />
+                  <CompositorPreview stream={compositorStream} />
                 ) : (
                   <div className="flex size-full items-center justify-center">
                     <p className="text-xs text-zinc-600">No sources on stage</p>
@@ -246,10 +219,14 @@ export function StudioConnected({
             <span className="mr-2 text-[10px] font-medium uppercase tracking-widest text-zinc-600">
               Layout
             </span>
-            {LAYOUTS.map((l) => (
-              <button key={l.id} onClick={() => setActiveLayout(l.id)}>
-                <LayoutThumb id={l.id} label={l.label} active={activeLayout === l.id} />
-              </button>
+            {STUDIO_LAYOUTS.map((l) => (
+              <LayoutThumb
+                key={l.id}
+                id={l.id}
+                label={l.label}
+                active={activeLayoutId === l.id}
+                onClick={() => switchLayout(l.id)}
+              />
             ))}
           </div>
         </div>
@@ -281,13 +258,16 @@ export function StudioConnected({
 
       {/* ── Bottom strip ── */}
       <StudioBottomBar
+        sources={sources}
+        onCanvasSlots={onCanvasSlots}
         cameras={cameras}
         microphones={microphones}
         toggleVideo={toggleVideo}
         toggleAudio={toggleAudio}
         switchCamera={switchCamera}
         switchMicrophone={switchMicrophone}
-        shareScreen={shareScreen}
+        toggleScreenShare={toggleScreenShare}
+        toggleSourceOnCanvas={toggleSourceOnCanvas}
       />
     </div>
   )

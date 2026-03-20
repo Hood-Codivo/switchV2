@@ -65,13 +65,18 @@ export function StudioView() {
       <RtkParticipantsAudio />
       <StudioConnected
         compositorStream={studio.compositorStream}
+        sources={studio.sources}
+        onCanvasSlots={studio.onCanvasSlots}
+        activeLayoutId={studio.activeLayoutId}
         cameras={studio.cameras}
         microphones={studio.microphones}
         toggleVideo={studio.toggleVideo}
         toggleAudio={studio.toggleAudio}
         switchCamera={studio.switchCamera}
         switchMicrophone={studio.switchMicrophone}
-        shareScreen={studio.shareScreen}
+        toggleScreenShare={studio.toggleScreenShare}
+        toggleSourceOnCanvas={studio.toggleSourceOnCanvas}
+        switchLayout={studio.switchLayout}
         endSession={studio.endSession}
       />
     </RealtimeKitProvider>
