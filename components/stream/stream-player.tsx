@@ -11,7 +11,7 @@ type StreamPlayerProps = {
   viewerCount: number
 }
 
-export function StreamPlayer({ hlsUrl, title, category, viewerCount }: StreamPlayerProps) {
+export function StreamPlayer({ hlsUrl, viewerCount }: StreamPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
@@ -29,7 +29,6 @@ export function StreamPlayer({ hlsUrl, title, category, viewerCount }: StreamPla
         hls.destroy()
       }
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      // Safari native HLS support
       const onLoaded = () => { video.play().catch(() => {}) }
       video.src = hlsUrl
       video.addEventListener("loadedmetadata", onLoaded)
@@ -41,28 +40,24 @@ export function StreamPlayer({ hlsUrl, title, category, viewerCount }: StreamPla
   }, [hlsUrl])
 
   return (
-    <div className="relative w-full">
+    <div className="group relative w-full overflow-hidden">
       <video
         ref={videoRef}
         controls
         playsInline
-        className="aspect-video w-full rounded-xl bg-black"
+        className="aspect-video w-full"
       />
-      {/* LIVE badge overlay */}
-      <div className="absolute top-3 left-3 flex items-center gap-1.5 rounded-full bg-red-600 px-2 py-0.5 text-xs font-bold text-white">
-        <span className="size-1.5 animate-pulse rounded-full bg-white" />
-        LIVE
-      </div>
-      {/* Metadata bar */}
-      <div className="mt-2 flex items-center justify-between">
-        <div>
-          <p className="text-sm font-semibold">{title}</p>
-          <p className="text-xs text-muted-foreground">{category}</p>
-        </div>
-        <div className="flex items-center gap-1 text-sm text-muted-foreground">
-          <Users className="size-3.5" />
-          <span>{viewerCount.toLocaleString()}</span>
-        </div>
+
+      {/* Top-left overlay: LIVE + viewer count */}
+      <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2">
+        <span className="flex items-center gap-1.5 rounded bg-red-600 px-2 py-1 text-xs font-bold text-white shadow-lg">
+          <span className="size-1.5 animate-pulse rounded-full bg-white" />
+          LIVE
+        </span>
+        <span className="flex items-center gap-1 rounded bg-black/60 px-2 py-1 text-xs font-medium text-white backdrop-blur-sm">
+          <Users className="size-3" />
+          {viewerCount.toLocaleString()} Viewers
+        </span>
       </div>
     </div>
   )

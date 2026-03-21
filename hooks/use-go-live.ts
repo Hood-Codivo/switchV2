@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { useMutation, useQuery } from "convex/react"
+import { useAction, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type RTKClient from "@cloudflare/realtimekit"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -30,7 +30,6 @@ function deriveHealth(report: RTCStatsReport): StreamHealth {
   report.forEach((stat) => {
     if (stat.type === "outbound-rtp") {
       hasOutboundRtp = true
-      // RTCOutboundRtpStreamStats fields
       const s = stat as RTCOutboundRtpStreamStats & {
         packetsLost?: number
         packetsSent?: number
@@ -61,20 +60,15 @@ export function useGoLive(
   const [liveState, setLiveState] = useState<GoLiveState>("idle")
   const [health, setHealth] = useState<StreamHealth | null>(null)
 
-  // Store streamId in a ref to avoid stale closures in endStream
   const streamIdRef = useRef<Id<"streams"> | null>(null)
-  // Interval ref for health polling cleanup
   const healthIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Convex mutations
-  const createStream = useMutation(api.streams.create)
-  const setStatus = useMutation(api.streams.setStatus)
-  const setLive = useMutation(api.streams.setLive)
+  // Convex actions — go-live and end-stream handled entirely on the backend
+  const goLiveAction = useAction(api.streams.goLive)
+  const endLivestreamAction = useAction(api.streams.endLivestream)
 
-  // Get current user for getActive query arg
+  // Reactive viewer count from Convex
   const currentUser = useQuery(api.users.getCurrentUser, {})
-
-  // Reactive viewer count from Convex — skipped until we have a userId
   const activeStream = useQuery(
     api.streams.getActive,
     currentUser?._id ? { userId: currentUser._id } : "skip",
@@ -85,8 +79,6 @@ export function useGoLive(
 
   const startHealthMonitoring = useCallback(() => {
     if (!client) return
-
-    // RTK client exposes getStats() at runtime but it isn't in the type — safe cast
     const clientWithStats = client as unknown as { getStats?: () => Promise<RTCStatsReport> }
     healthIntervalRef.current = setInterval(() => {
       void clientWithStats.getStats?.().then((report) => {
@@ -109,41 +101,19 @@ export function useGoLive(
 
   const goLive = useCallback(
     async (title: string, category: StreamCategory) => {
-      if (!client) throw new Error("RTK client not connected")
-
       setLiveState("starting")
-
-      // 1. Create stream record in Convex (idle status)
-      const id = await createStream({ title, category })
-      streamIdRef.current = id
-
-      // 2. Transition to starting
-      await setStatus({ id, status: "starting" })
-
       try {
-        // 3. Start RTK livestream — Cloudflare Realtime manages the HLS egress
-        await client.livestream.start({ manualIngestion: false })
-
-        // 4. Retrieve the playback URL from the livestream object after start()
-        const playbackUrl = client.livestream.playbackUrl
-        if (!playbackUrl) throw new Error("RTK livestream started but no playback URL returned")
-
-        // 5. Store playback URL and mark as live in Convex
-        await setLive({ id, playbackUrl })
+        const { streamId } = await goLiveAction({ title, category })
+        streamIdRef.current = streamId as Id<"streams">
+        setLiveState("live")
+        startHealthMonitoring()
       } catch (err) {
-        // Roll back — mark the stream ended so the channel page doesn't show
-        // a permanently-spinning "starting" placeholder.
-        await setStatus({ id, status: "ended", endedAt: Date.now() })
-        streamIdRef.current = null
         setLiveState("idle")
+        streamIdRef.current = null
         throw err
       }
-
-      // 6. Update local state and begin health polling
-      setLiveState("live")
-      startHealthMonitoring()
     },
-    [client, createStream, setStatus, setLive, startHealthMonitoring],
+    [goLiveAction, startHealthMonitoring],
   )
 
   // ─── endStream ───────────────────────────────────────────────────────────
@@ -153,22 +123,13 @@ export function useGoLive(
     if (!id) return
 
     setLiveState("ending")
-
-    // Stop health polling first
     stopHealthMonitoring()
 
-    // Stop RTK livestream
-    if (client) {
-      await client.livestream.stop()
-    }
+    await endLivestreamAction({ streamId: id })
 
-    // Mark ended in Convex
-    await setStatus({ id, status: "ended", endedAt: Date.now() })
-
-    // Reset local state
     setLiveState("idle")
     streamIdRef.current = null
-  }, [client, setStatus, stopHealthMonitoring])
+  }, [endLivestreamAction, stopHealthMonitoring])
 
   // ─── Cleanup on unmount ───────────────────────────────────────────────────
 

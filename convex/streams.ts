@@ -1,6 +1,7 @@
 import { v } from "convex/values"
-import { internalQuery, mutation, query } from "./_generated/server"
+import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server"
 import { getAuthUserId } from "@convex-dev/auth/server"
+import { api, internal } from "./_generated/api"
 import { categoryValidator, streamStatusValidator } from "./schema"
 
 // ─── getActiveSessionForCreator ───────────────────────────────────────────────
@@ -12,6 +13,28 @@ export const getActiveSessionForCreator = internalQuery({
       .query("studioSessions")
       .withIndex("by_creator_and_status", (q) => q.eq("creatorId", userId).eq("status", "active"))
       .first()
+  },
+})
+
+// ─── endStaleStreams ──────────────────────────────────────────────────────────
+// Marks all non-ended streams for a user as ended. Called from goLive before
+// creating a new stream to clean up stale records from previous failed attempts.
+
+export const endStaleStreams = internalMutation({
+  args: { userId: v.id("users") },
+  handler: async (ctx, { userId }) => {
+    const stale = await ctx.db
+      .query("streams")
+      .withIndex("by_creator", (q) => q.eq("creatorId", userId))
+      .filter((q) => q.neq(q.field("status"), "ended"))
+      .collect()
+
+    const now = Date.now()
+    await Promise.all(
+      stale.map((s) =>
+        ctx.db.patch(s._id, { status: "ended", endedAt: now, viewerCount: 0 }),
+      ),
+    )
   },
 })
 
@@ -119,10 +142,21 @@ export const heartbeat = mutation({
 export const getByUsername = query({
   args: { username: v.string() },
   handler: async (ctx, { username }) => {
+    // Always prefer a "live" stream — stale "starting" records from previous
+    // failed attempts must never shadow an active broadcast.
+    const live = await ctx.db
+      .query("streams")
+      .withIndex("by_username", (q) => q.eq("username", username))
+      .filter((q) => q.eq(q.field("status"), "live"))
+      .first()
+    if (live) return live
+
+    // Fallback: show the most recent "starting" stream (pre-broadcast spinner)
     return ctx.db
       .query("streams")
       .withIndex("by_username", (q) => q.eq("username", username))
-      .filter((q) => q.neq(q.field("status"), "ended"))
+      .order("desc")
+      .filter((q) => q.eq(q.field("status"), "starting"))
       .first()
   },
 })
@@ -135,6 +169,7 @@ export const getActive = query({
     return ctx.db
       .query("streams")
       .withIndex("by_creator", (q) => q.eq("creatorId", userId))
+      .order("desc")
       .filter((q) =>
         q.and(
           q.neq(q.field("status"), "ended"),
@@ -185,5 +220,121 @@ export const listLiveStreams = query({
         stream.title.toLowerCase().startsWith(q) ||
         (creator?.username ?? "").toLowerCase().startsWith(q),
     )
+  },
+})
+
+// ─── goLive ───────────────────────────────────────────────────────────────────
+// Starts an HLS livestream via the RTK REST API and marks the stream live in
+// Convex with the playback URL returned directly by Cloudflare — no socket
+// event polling required.
+
+export const goLive = action({
+  args: {
+    title: v.string(),
+    category: categoryValidator,
+  },
+  handler: async (ctx, { title, category }): Promise<{ streamId: string }> => {
+    const userId = await getAuthUserId(ctx)
+    if (!userId) throw new Error("Not authenticated")
+
+    const session = await ctx.runQuery(internal.streams.getActiveSessionForCreator, { userId })
+    if (!session) throw new Error("No active studio session — open the studio first")
+
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN
+    const appId = process.env.CLOUDFLARE_REALTIMEKIT_APP_ID
+    if (!accountId || !apiToken || !appId) throw new Error("Cloudflare Realtime not configured")
+
+    const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/realtime/kit/${appId}`
+    const headers = { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" }
+
+    // Clean up any stale non-ended streams from previous failed attempts so
+    // getByUsername doesn't shadow the new stream on the viewer page.
+    await ctx.runMutation(internal.streams.endStaleStreams, { userId })
+
+    // Create the stream record and mark it as starting
+    const streamId = await ctx.runMutation(api.streams.create, { title, category })
+    await ctx.runMutation(api.streams.setStatus, { id: streamId, status: "starting" })
+
+    try {
+      // Start the HLS livestream on Cloudflare
+      const startRes = await fetch(
+        `${baseUrl}/meetings/${session.cloudflareRoomId}/livestreams`,
+        { method: "POST", headers, body: JSON.stringify({}) },
+      )
+      if (!startRes.ok) {
+        const body = await startRes.text()
+        throw new Error(`Cloudflare livestream start failed: ${startRes.status} — ${body}`)
+      }
+
+      // Log full response to diagnose field names — Cloudflare RTK uses { data: ... }
+      // for POST but may use { result: ... } for GET. Parse defensively.
+      const startBody = await startRes.json()
+      console.log("goLive: POST /livestreams response", JSON.stringify(startBody))
+
+      // Try both data.playback_url and result.playback_url in case the wrapper differs
+      const startData = (startBody as Record<string, Record<string, unknown>>).data
+        ?? (startBody as Record<string, Record<string, unknown>>).result
+      let playbackUrl: string | null = (startData?.playback_url as string) ?? null
+
+      if (!playbackUrl) {
+        const deadline = Date.now() + 30_000
+        while (!playbackUrl && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 1500))
+          const pollRes = await fetch(
+            `${baseUrl}/meetings/${session.cloudflareRoomId}/active-livestream`,
+            { headers: { Authorization: `Bearer ${apiToken}` } },
+          )
+          if (pollRes.ok) {
+            const pollBody = await pollRes.json()
+            console.log("goLive: GET /active-livestream poll", JSON.stringify(pollBody))
+            const pollData = (pollBody as Record<string, Record<string, unknown>>).data
+              ?? (pollBody as Record<string, Record<string, unknown>>).result
+            playbackUrl = (pollData?.playback_url as string) ?? null
+          }
+        }
+      }
+
+      if (!playbackUrl) {
+        throw new Error("Cloudflare did not return a playback URL within 30 s")
+      }
+
+      await ctx.runMutation(api.streams.setLive, { id: streamId, playbackUrl })
+      return { streamId }
+    } catch (err) {
+      // Roll back Convex record so the creator can retry
+      await ctx.runMutation(api.streams.setStatus, { id: streamId, status: "ended", endedAt: Date.now() })
+      throw err
+    }
+  },
+})
+
+// ─── endLivestream ────────────────────────────────────────────────────────────
+
+export const endLivestream = action({
+  args: { streamId: v.id("streams") },
+  handler: async (ctx, { streamId }) => {
+    const userId = await getAuthUserId(ctx)
+    if (!userId) throw new Error("Not authenticated")
+
+    const session = await ctx.runQuery(internal.streams.getActiveSessionForCreator, { userId })
+    if (!session) throw new Error("No active studio session")
+
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN
+    const appId = process.env.CLOUDFLARE_REALTIMEKIT_APP_ID
+    if (!accountId || !apiToken || !appId) throw new Error("Cloudflare Realtime not configured")
+
+    const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/realtime/kit/${appId}`
+
+    // Best-effort stop — swallow errors if there is no active livestream on Cloudflare
+    try {
+      await fetch(
+        `${baseUrl}/meetings/${session.cloudflareRoomId}/active-livestream/stop`,
+        { method: "POST", headers: { Authorization: `Bearer ${apiToken}` } },
+      )
+    } catch { /* no active stream on server */ }
+
+    await ctx.runMutation(api.streams.setStatus, { id: streamId, status: "ended", endedAt: Date.now() })
   },
 })
