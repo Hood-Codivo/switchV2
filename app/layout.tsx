@@ -19,7 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <html
         lang="en"
         suppressHydrationWarning
-        className={cn("antialiased", fontMono.variable, "font-sans", inter.variable)}
+        className={cn("dark antialiased", fontMono.variable, "font-sans", inter.variable)}
       >
         <body>
           <ThemeProvider defaultTheme="dark">
