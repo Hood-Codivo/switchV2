@@ -7,9 +7,10 @@ import { api } from "@/convex/_generated/api"
 import type { Doc } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { useState } from "react"
-import { Heart, MessageCircle, UsersRound, Smile } from "lucide-react"
+import { Heart } from "lucide-react"
 import { useStreamViewer } from "@/hooks/use-stream-viewer"
 import { StreamPlayer } from "@/components/stream/stream-player"
+import { StreamChatPanel } from "@/components/stream/stream-chat-panel"
 import Link from "next/link"
 import Image from "next/image"
 
@@ -74,57 +75,6 @@ function FollowButton({
         {countLabel}
       </span>
     </button>
-  )
-}
-
-// ─── Chat Placeholder ───────────────────────────────────────────────────────
-
-function ChatPlaceholder() {
-  return (
-    <div className="flex h-full flex-col border border-border/65 bg-card">
-      {/* Tabs */}
-      <div className="flex border-b border-zinc-800">
-        <button className="flex flex-1 items-center justify-center gap-2 border-b-2 border-red-500 py-3 text-sm font-medium text-zinc-100">
-          <MessageCircle className="size-4" />
-          Stream Chat
-        </button>
-        <button className="flex flex-1 items-center justify-center gap-2 py-3 text-sm text-zinc-500 transition-colors hover:text-zinc-300">
-          <UsersRound className="size-4" />
-          Participants
-        </button>
-      </div>
-
-      {/* Messages area */}
-      <div className="flex flex-1 flex-col justify-end gap-2.5 overflow-y-auto p-4">
-        <ChatBubble name="Viewer" color="text-emerald-400" message="Welcome to the stream!" />
-        <ChatBubble name="Guest" color="text-sky-400" message="Lfg!!!" />
-        <p className="py-8 text-center text-xs text-zinc-600">
-          Chat will be available soon
-        </p>
-      </div>
-
-      {/* Input */}
-      <div className="border-t border-zinc-800 p-3">
-        <div className="flex items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-4 py-2">
-          <input
-            type="text"
-            placeholder="Send a message"
-            disabled
-            className="flex-1 bg-transparent text-sm text-zinc-300 placeholder:text-zinc-600 focus:outline-none disabled:cursor-not-allowed"
-          />
-          <Smile className="size-4 text-zinc-600" />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function ChatBubble({ name, color, message }: { name: string; color: string; message: string }) {
-  return (
-    <p className="text-sm">
-      <span className={`font-semibold ${color}`}>{name}:</span>{" "}
-      <span className="text-zinc-300">{message}</span>
-    </p>
   )
 }
 
@@ -324,12 +274,18 @@ export function ChannelPageClient({ initialData, initialStream }: Props) {
             <RecommendedStreams currentStreamId={stream?._id} />
           </div>
 
-          {/* Right — Chat sidebar */}
-          <div className="hidden w-[340px] shrink-0 lg:block">
-            <div className="sticky top-[72px] h-[calc(100vh-88px)]">
-              <ChatPlaceholder />
+          {/* Right — Chat sidebar (only when stream is live or starting) */}
+          {stream && stream.status !== "ended" && (
+            <div className="hidden w-[340px] shrink-0 lg:block">
+              <div className="sticky top-[72px] h-[calc(100vh-88px)]">
+                <StreamChatPanel
+                  streamId={stream._id}
+                  creatorId={stream.creatorId}
+                  isCreator={isOwnChannel}
+                />
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

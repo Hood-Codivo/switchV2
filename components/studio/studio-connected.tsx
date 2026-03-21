@@ -13,6 +13,7 @@ import type { StreamCategory } from "@/convex/schema"
 import { StudioBottomBar } from "./studio-bottom-bar"
 import { StudioLayoutCanvas } from "./studio-layout-canvas"
 import { GoLiveModal } from "./go-live-modal"
+import { StudioCommentsPanel } from "@/components/stream/stream-chat-panel"
 import { StreamHealthIndicator } from "./stream-health-indicator"
 
 // ─── Layout thumbnail ─────────────────────────────────────────────────────────
@@ -393,6 +394,13 @@ export function StudioConnected({
   const [activeTab, setActiveTab] = useState<SidebarTab>("people")
   const [modalOpen, setModalOpen] = useState(false)
 
+  // Query the active stream for the Comments panel (public chat feed)
+  const currentUser = useQuery(api.users.getCurrentUser, {})
+  const activeStream = useQuery(
+    api.streams.getActive,
+    currentUser?._id ? { userId: currentUser._id } : "skip",
+  )
+
   function handleCompositorStream(stream: MediaStream | null) {
     onCompositorStream?.(stream)
   }
@@ -551,7 +559,9 @@ export function StudioConnected({
             <BackstageChatPanel sessionId={sessionId} guestId={guestId} />
           )}
           {activeTab === "comments" && (
-            <SidebarEmpty tab="comments" />
+            activeStream?._id
+              ? <StudioCommentsPanel streamId={activeStream._id} />
+              : <SidebarEmpty tab="comments" />
           )}
         </aside>
       </div>
