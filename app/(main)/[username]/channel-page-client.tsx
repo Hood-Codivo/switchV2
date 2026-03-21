@@ -85,11 +85,13 @@ function CreatorInfoBar({
   stream,
   followerCount,
   isOwnChannel,
+  onSendTip,
 }: {
   user: Doc<"users">
   stream: Doc<"streams"> | null
   followerCount: number
   isOwnChannel: boolean
+  onSendTip: () => void
 }) {
   const avatarSrc = user.avatarUrl ?? user.image ?? null
   const initial = (user.displayName ?? user.username ?? "?")[0]?.toUpperCase()
@@ -125,13 +127,15 @@ function CreatorInfoBar({
           isOwnChannel={isOwnChannel}
           followerCount={followerCount}
         />
-        <Button
-          size="sm"
-          disabled
-          className="rounded-full bg-red-500 px-5 text-xs font-semibold text-white hover:bg-red-600 disabled:opacity-50"
-        >
-          Send Tip
-        </Button>
+        {stream?.status === "live" && !isOwnChannel && (
+          <Button
+            size="sm"
+            onClick={onSendTip}
+            className="rounded-full bg-red-500 px-5 text-xs font-semibold text-white hover:bg-red-600"
+          >
+            Send Tip
+          </Button>
+        )}
       </div>
     </div>
   )
@@ -218,6 +222,7 @@ function OfflinePlayer({ user }: { user: Doc<"users"> }) {
 // ─── Main Page ──────────────────────────────────────────────────────────────
 
 export function ChannelPageClient({ initialData, initialStream }: Props) {
+  const [showTipPanel, setShowTipPanel] = useState(false)
   const liveData = useQuery(
     api.follows.getChannelPage,
     initialData.user.username ? { username: initialData.user.username } : "skip",
@@ -268,6 +273,7 @@ export function ChannelPageClient({ initialData, initialStream }: Props) {
               stream={stream}
               followerCount={followerCount}
               isOwnChannel={isOwnChannel}
+              onSendTip={() => setShowTipPanel(true)}
             />
 
             {/* Recommended streams */}
@@ -282,6 +288,8 @@ export function ChannelPageClient({ initialData, initialStream }: Props) {
                   streamId={stream._id}
                   creatorId={stream.creatorId}
                   isCreator={isOwnChannel}
+                  showTipPanel={showTipPanel}
+                  onCloseTipPanel={() => setShowTipPanel(false)}
                 />
               </div>
             </div>

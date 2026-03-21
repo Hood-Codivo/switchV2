@@ -51,6 +51,7 @@ export default defineSchema({
     endedAt: v.optional(v.number()),
     viewerCount: v.number(),
     peakViewerCount: v.number(),
+    tipTotal: v.optional(v.number()),           // running total of tips received this stream
     slowModeInterval: v.optional(v.number()), // seconds between messages, 0 or absent = off
     chatClearedAt: v.optional(v.number()),    // timestamp; messages before this are hidden
   })
@@ -124,6 +125,49 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_stream_and_user", ["streamId", "userId"]),
+  tipTransactions: defineTable({
+    fromUserId: v.id("users"),
+    toUserId: v.id("users"),
+    streamId: v.id("streams"),
+    amount: v.number(),
+    message: v.optional(v.string()),
+    solanaSignature: v.optional(v.string()), // Phase 3 — nullable until Solana integration
+    tokenMint: v.optional(v.string()),       // Phase 3 — nullable until Solana integration
+    createdAt: v.number(),
+  })
+    .index("by_stream", ["streamId"])
+    .index("by_from_user", ["fromUserId"])
+    .index("by_to_user", ["toUserId"]),
+  tipAlerts: defineTable({
+    streamId: v.id("streams"),
+    fromUsername: v.string(),
+    amount: v.number(),
+    message: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_stream", ["streamId"]),
+  notifications: defineTable({
+    userId: v.id("users"),
+    type: v.literal("go-live"),
+    streamId: v.id("streams"),
+    creatorId: v.id("users"),
+    creatorName: v.string(),
+    creatorUsername: v.string(),
+    streamTitle: v.string(),
+    read: v.boolean(),
+    createdAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_and_read", ["userId", "read"]),
+  pushSubscriptions: defineTable({
+    userId: v.id("users"),
+    endpoint: v.string(),
+    p256dhKey: v.string(),
+    authKey: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_endpoint", ["endpoint"]),
   backstageMessages: defineTable({
     sessionId: v.id("studioSessions"),
     senderType: v.union(v.literal("creator"), v.literal("guest")),

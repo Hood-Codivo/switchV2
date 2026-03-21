@@ -300,6 +300,17 @@ export const goLive = action({
       }
 
       await ctx.runMutation(api.streams.setLive, { id: streamId, playbackUrl })
+
+      // Fan out go-live notifications to all followers
+      const userRecord = await ctx.runQuery(api.users.getCurrentUser, {})
+      await ctx.runMutation(internal.notifications.fanOutGoLiveNotifications, {
+        streamId,
+        creatorId: userId,
+        creatorName: userRecord?.displayName ?? userRecord?.username ?? "Creator",
+        creatorUsername: userRecord?.username ?? "",
+        streamTitle: title,
+      })
+
       return { streamId }
     } catch (err) {
       // Roll back Convex record so the creator can retry

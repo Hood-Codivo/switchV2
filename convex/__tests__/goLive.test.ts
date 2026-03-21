@@ -98,6 +98,7 @@ describe("streams.setLive", () => {
         playbackUrl: "https://customer-xyz.cloudflarestream.com/abc/manifest/video.m3u8",
       })
 
+
     const stream = await t.run(async (ctx) => ctx.db.get(streamId))
     expect(stream?.status).toBe("live")
     expect(stream?.playbackUrl).toBe(
@@ -222,6 +223,7 @@ describe("streams.getByUsername", () => {
       playbackUrl: "https://example.com/manifest.m3u8",
     })
 
+
     const result = await t.query(api.streams.getByUsername, { username: "alice" })
 
     expect(result?._id).toBe(streamId)
@@ -277,6 +279,7 @@ describe("streams.getActive", () => {
       id: streamId,
       playbackUrl: "https://example.com/manifest.m3u8",
     })
+
 
     const result = await t.query(api.streams.getActive, { userId: userId })
 
