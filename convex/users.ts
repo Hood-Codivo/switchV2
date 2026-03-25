@@ -1,13 +1,17 @@
 import { v } from "convex/values"
 import { mutation, query } from "./_generated/server"
-import { getAuthUserId } from "@convex-dev/auth/server"
+import { getAuthenticatedUser } from "./auth"
 import { validateUsername } from "./lib/username"
 
 export const getCurrentUser = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) return null
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      return null
+    }
     const user = await ctx.db.get(userId)
     // Return null for users who haven't completed onboarding yet
     if (!user?.username) return null
@@ -15,18 +19,6 @@ export const getCurrentUser = query({
   },
 })
 
-// Returns Google OAuth profile data before onboarding is complete.
-// Used to pre-fill the onboarding form with the user's real name.
-export const getGoogleProfile = query({
-  args: {},
-  handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) return null
-    const user = await ctx.db.get(userId)
-    if (!user) return null
-    return { name: user.name ?? null, image: user.image ?? null }
-  },
-})
 
 export const checkUsernameAvailable = query({
   args: { username: v.string() },
@@ -43,10 +35,14 @@ export const completeOnboarding = mutation({
   args: {
     username: v.string(),
     displayName: v.string(),
+    walletAddress: v.string(),
   },
-  handler: async (ctx, { username, displayName }) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+  handler: async (ctx, { username, displayName, walletAddress }) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error("Not authenticated")
+
+    const privyDid = identity.subject
+    if (!privyDid) throw new Error("Missing subject claim in identity")
 
     const validation = validateUsername(username)
     if (!validation.valid) throw new Error(validation.error)
@@ -57,14 +53,17 @@ export const completeOnboarding = mutation({
       .unique()
     if (existing !== null) throw new Error("Username is already taken")
 
-    // @convex-dev/auth already created the user row on OAuth sign-in.
-    // We patch it with the profile data the user chose during onboarding.
-    await ctx.db.patch(userId, {
+    // Privy handles login + wallet creation. We create the Convex user
+    // record during onboarding with the Privy DID and wallet address.
+    await ctx.db.insert("users", {
+      privyDid,
+      walletAddress,
       username,
       displayName,
       bio: "",
       avatarUrl: null,
       pointsBalance: 0,
+      followerCount: 0,
       createdAt: Date.now(),
     })
   },
@@ -76,9 +75,7 @@ export const updateProfile = mutation({
     bio: v.string(),
   },
   handler: async (ctx, { displayName, bio }) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
-
+    const userId = await getAuthenticatedUser(ctx)
     const user = await ctx.db.get(userId)
     if (!user) throw new Error("User not found")
 

@@ -11,8 +11,14 @@ const modules = import.meta.glob("../**/*.ts")
 
 async function seedUser(ctx: GenericMutationCtx<DataModel>, username: string): Promise<Id<"users">> {
   return ctx.db.insert("users", {
+    privyDid: `did:privy:test-${username}`,
+    walletAddress: `So1anaWa11etAddr3ss${username}`,
     username,
     displayName: username,
+    bio: "",
+    avatarUrl: null,
+    pointsBalance: 0,
+    followerCount: 0,
     createdAt: Date.now(),
   })
 }
@@ -63,8 +69,8 @@ describe("notifications.fanOutGoLiveNotifications", () => {
       streamTitle: "Going Live!",
     })
 
-    const n1 = await t.withIdentity({ subject: f1 }).query(api.notifications.list, {})
-    const n2 = await t.withIdentity({ subject: f2 }).query(api.notifications.list, {})
+    const n1 = await t.withIdentity({ subject: "did:privy:test-follower1" }).query(api.notifications.list, {})
+    const n2 = await t.withIdentity({ subject: "did:privy:test-follower2" }).query(api.notifications.list, {})
 
     expect(n1).toHaveLength(1)
     expect(n1[0].type).toBe("go-live")
@@ -87,7 +93,7 @@ describe("notifications.fanOutGoLiveNotifications", () => {
       streamTitle: "Going Live!",
     })
 
-    const notifs = await t.withIdentity({ subject: nonFollower }).query(api.notifications.list, {})
+    const notifs = await t.withIdentity({ subject: "did:privy:test-stranger" }).query(api.notifications.list, {})
     expect(notifs).toHaveLength(0)
   })
 })
@@ -110,7 +116,7 @@ describe("notifications.getUnreadCount", () => {
       streamTitle: "Stream 1",
     })
 
-    const count = await t.withIdentity({ subject: followerId }).query(api.notifications.getUnreadCount, {})
+    const count = await t.withIdentity({ subject: "did:privy:test-follower" }).query(api.notifications.getUnreadCount, {})
     expect(count).toBe(1)
   })
 
@@ -139,12 +145,12 @@ describe("notifications.markRead", () => {
       streamTitle: "Test",
     })
 
-    const notifs = await t.withIdentity({ subject: followerId }).query(api.notifications.list, {})
-    await t.withIdentity({ subject: followerId }).mutation(api.notifications.markRead, {
+    const notifs = await t.withIdentity({ subject: "did:privy:test-follower" }).query(api.notifications.list, {})
+    await t.withIdentity({ subject: "did:privy:test-follower" }).mutation(api.notifications.markRead, {
       notificationId: notifs[0]._id,
     })
 
-    const after = await t.withIdentity({ subject: followerId }).query(api.notifications.getUnreadCount, {})
+    const after = await t.withIdentity({ subject: "did:privy:test-follower" }).query(api.notifications.getUnreadCount, {})
     expect(after).toBe(0)
   })
 
@@ -164,10 +170,10 @@ describe("notifications.markRead", () => {
       streamTitle: "Test",
     })
 
-    const notifs = await t.withIdentity({ subject: followerId }).query(api.notifications.list, {})
+    const notifs = await t.withIdentity({ subject: "did:privy:test-follower" }).query(api.notifications.list, {})
 
     await expect(
-      t.withIdentity({ subject: otherId }).mutation(api.notifications.markRead, {
+      t.withIdentity({ subject: "did:privy:test-other" }).mutation(api.notifications.markRead, {
         notificationId: notifs[0]._id,
       }),
     ).rejects.toThrow()
@@ -198,9 +204,9 @@ describe("notifications.markAllRead", () => {
       streamTitle: "Stream 2",
     })
 
-    await t.withIdentity({ subject: followerId }).mutation(api.notifications.markAllRead, {})
+    await t.withIdentity({ subject: "did:privy:test-follower" }).mutation(api.notifications.markAllRead, {})
 
-    const count = await t.withIdentity({ subject: followerId }).query(api.notifications.getUnreadCount, {})
+    const count = await t.withIdentity({ subject: "did:privy:test-follower" }).query(api.notifications.getUnreadCount, {})
     expect(count).toBe(0)
   })
 })
@@ -212,7 +218,7 @@ describe("notifications.savePushSubscription", () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "user"))
 
-    await t.withIdentity({ subject: userId }).mutation(api.notifications.savePushSubscription, {
+    await t.withIdentity({ subject: "did:privy:test-user" }).mutation(api.notifications.savePushSubscription, {
       endpoint: "https://fcm.googleapis.com/fcm/send/abc123",
       p256dhKey: "key123",
       authKey: "auth123",
@@ -235,8 +241,8 @@ describe("notifications.savePushSubscription", () => {
       authKey: "auth1",
     }
 
-    await t.withIdentity({ subject: userId }).mutation(api.notifications.savePushSubscription, args)
-    await t.withIdentity({ subject: userId }).mutation(api.notifications.savePushSubscription, {
+    await t.withIdentity({ subject: "did:privy:test-user" }).mutation(api.notifications.savePushSubscription, args)
+    await t.withIdentity({ subject: "did:privy:test-user" }).mutation(api.notifications.savePushSubscription, {
       ...args,
       p256dhKey: "key2",
     })

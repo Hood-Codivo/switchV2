@@ -93,7 +93,7 @@ function CreatorInfoBar({
   isOwnChannel: boolean
   onSendTip: () => void
 }) {
-  const avatarSrc = user.avatarUrl ?? user.image ?? null
+  const avatarSrc = user.avatarUrl ?? null
   const initial = (user.displayName ?? user.username ?? "?")[0]?.toUpperCase()
 
   return (
@@ -164,7 +164,7 @@ function RecommendedStreams({ currentStreamId }: { currentStreamId?: string }) {
       <div className="flex gap-6 overflow-x-auto pb-2">
         {others.slice(0, 6).map(({ stream, creator }) => {
           const username = creator?.username ?? ""
-          const avatarSrc = creator?.avatarUrl ?? creator?.image ?? null
+          const avatarSrc = creator?.avatarUrl ?? null
           const initial = (creator?.displayName ?? username ?? "?")[0]?.toUpperCase()
 
           return (
@@ -197,7 +197,7 @@ function RecommendedStreams({ currentStreamId }: { currentStreamId?: string }) {
 // ─── Offline State ──────────────────────────────────────────────────────────
 
 function OfflinePlayer({ user }: { user: Doc<"users"> }) {
-  const avatarSrc = user.avatarUrl ?? user.image ?? null
+  const avatarSrc = user.avatarUrl ?? null
   const initial = (user.displayName ?? user.username ?? "?")[0]?.toUpperCase()
 
   return (

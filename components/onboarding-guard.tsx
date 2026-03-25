@@ -2,13 +2,14 @@
 
 import { useQuery } from "convex/react"
 import { useConvexAuth } from "convex/react"
+import { usePrivy } from "@privy-io/react-auth"
 import { api } from "@/convex/_generated/api"
 import { OnboardingDialog } from "@/components/onboarding-dialog"
 
 export function OnboardingGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useConvexAuth()
+  const { user: privyUser } = usePrivy()
   const currentUser = useQuery(api.users.getCurrentUser, {})
-  const googleProfile = useQuery(api.users.getGoogleProfile, {})
 
   const needsOnboarding = isAuthenticated && currentUser === null
 
@@ -16,9 +17,9 @@ export function OnboardingGuard({ children }: { children: React.ReactNode }) {
     <>
       {children}
       <OnboardingDialog
-        key={googleProfile?.name ?? "loading"}
+        key={privyUser?.google?.name ?? "loading"}
         open={needsOnboarding}
-        googleName={googleProfile?.name ?? undefined}
+        googleName={privyUser?.google?.name ?? undefined}
       />
     </>
   )

@@ -1,6 +1,6 @@
 import { v } from "convex/values"
 import { mutation, query } from "./_generated/server"
-import { getAuthUserId } from "@convex-dev/auth/server"
+import { getAuthenticatedUser } from "./auth"
 
 export const getChannelPage = query({
   args: { username: v.string() },
@@ -18,8 +18,7 @@ export const getChannelPage = query({
 export const followUser = mutation({
   args: { creatorId: v.id("users") },
   handler: async (ctx, { creatorId }) => {
-    const followerId = await getAuthUserId(ctx)
-    if (!followerId) throw new Error("Not authenticated")
+    const followerId = await getAuthenticatedUser(ctx)
     if (followerId === creatorId) throw new Error("Cannot follow yourself")
 
     const existing = await ctx.db
@@ -42,8 +41,7 @@ export const followUser = mutation({
 export const unfollowUser = mutation({
   args: { creatorId: v.id("users") },
   handler: async (ctx, { creatorId }) => {
-    const followerId = await getAuthUserId(ctx)
-    if (!followerId) throw new Error("Not authenticated")
+    const followerId = await getAuthenticatedUser(ctx)
 
     const existing = await ctx.db
       .query("follows")
@@ -65,8 +63,12 @@ export const unfollowUser = mutation({
 export const getFollowState = query({
   args: { creatorId: v.id("users") },
   handler: async (ctx, { creatorId }) => {
-    const followerId = await getAuthUserId(ctx)
-    if (!followerId) return false
+    let followerId
+    try {
+      followerId = await getAuthenticatedUser(ctx)
+    } catch {
+      return false
+    }
 
     const existing = await ctx.db
       .query("follows")

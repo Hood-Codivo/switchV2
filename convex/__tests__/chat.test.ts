@@ -11,8 +11,14 @@ const modules = import.meta.glob("../**/*.ts")
 
 async function seedUser(ctx: GenericMutationCtx<DataModel>, username: string): Promise<Id<"users">> {
   return ctx.db.insert("users", {
+    privyDid: `did:privy:test-${username}`,
+    walletAddress: `So1anaWa11etAddr3ss${username}`,
     username,
     displayName: username,
+    bio: "",
+    avatarUrl: null,
+    pointsBalance: 0,
+    followerCount: 0,
     createdAt: Date.now(),
   })
 }
@@ -45,7 +51,7 @@ describe("chat.sendMessage", () => {
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer"))
 
     const msgId = await t
-      .withIdentity({ subject: viewerId })
+      .withIdentity({ subject: "did:privy:test-viewer" })
       .mutation(api.chat.sendMessage, { streamId, content: "Hello stream!" })
 
     const msg = await t.run(async (ctx) => ctx.db.get(msgId))
@@ -64,7 +70,7 @@ describe("chat.sendMessage", () => {
 
     await expect(
       t.mutation(api.chat.sendMessage, { streamId, content: "Hello" }),
-    ).rejects.toThrow("Sign in")
+    ).rejects.toThrow("Not authenticated")
   })
 
   it("rejects messages on non-live streams", async () => {
@@ -85,7 +91,7 @@ describe("chat.sendMessage", () => {
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer"))
 
     await expect(
-      t.withIdentity({ subject: viewerId }).mutation(api.chat.sendMessage, {
+      t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.sendMessage, {
         streamId,
         content: "Hello",
       }),
@@ -99,7 +105,7 @@ describe("chat.sendMessage", () => {
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer"))
 
     await expect(
-      t.withIdentity({ subject: viewerId }).mutation(api.chat.sendMessage, {
+      t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.sendMessage, {
         streamId,
         content: "   ",
       }),
@@ -116,11 +122,11 @@ describe("chat.listMessages", () => {
     const streamId = await t.run(async (ctx) => seedLiveStream(ctx, creatorId, "creator"))
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer"))
 
-    await t.withIdentity({ subject: viewerId }).mutation(api.chat.sendMessage, {
+    await t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.sendMessage, {
       streamId,
       content: "First",
     })
-    await t.withIdentity({ subject: viewerId }).mutation(api.chat.sendMessage, {
+    await t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.sendMessage, {
       streamId,
       content: "Second",
     })
@@ -138,7 +144,7 @@ describe("chat.listMessages", () => {
     const streamId = await t.run(async (ctx) => seedLiveStream(ctx, creatorId, "creator"))
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer"))
 
-    const msgId = await t.withIdentity({ subject: viewerId }).mutation(api.chat.sendMessage, {
+    const msgId = await t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.sendMessage, {
       streamId,
       content: "Visible",
     })
@@ -160,7 +166,7 @@ describe("chat.moderateUser (ban)", () => {
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer"))
 
     // Ban the viewer
-    await t.withIdentity({ subject: creatorId }).mutation(api.chat.moderateUser, {
+    await t.withIdentity({ subject: "did:privy:test-creator" }).mutation(api.chat.moderateUser, {
       streamId,
       userId: viewerId,
       action: "ban",
@@ -168,7 +174,7 @@ describe("chat.moderateUser (ban)", () => {
 
     // Banned viewer should be rejected
     await expect(
-      t.withIdentity({ subject: viewerId }).mutation(api.chat.sendMessage, {
+      t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.sendMessage, {
         streamId,
         content: "I'm banned",
       }),
@@ -183,7 +189,7 @@ describe("chat.moderateUser (ban)", () => {
     const otherViewerId = await t.run(async (ctx) => seedUser(ctx, "other"))
 
     await expect(
-      t.withIdentity({ subject: viewerId }).mutation(api.chat.moderateUser, {
+      t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.moderateUser, {
         streamId,
         userId: otherViewerId,
         action: "ban",
@@ -202,7 +208,7 @@ describe("chat.moderateUser (timeout)", () => {
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer"))
 
     // Timeout for 60 seconds
-    await t.withIdentity({ subject: creatorId }).mutation(api.chat.moderateUser, {
+    await t.withIdentity({ subject: "did:privy:test-creator" }).mutation(api.chat.moderateUser, {
       streamId,
       userId: viewerId,
       action: "timeout",
@@ -210,7 +216,7 @@ describe("chat.moderateUser (timeout)", () => {
     })
 
     await expect(
-      t.withIdentity({ subject: viewerId }).mutation(api.chat.sendMessage, {
+      t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.sendMessage, {
         streamId,
         content: "I'm timed out",
       }),
@@ -236,7 +242,7 @@ describe("chat.moderateUser (timeout)", () => {
 
     // Should succeed — timeout has expired
     const msgId = await t
-      .withIdentity({ subject: viewerId })
+      .withIdentity({ subject: "did:privy:test-viewer" })
       .mutation(api.chat.sendMessage, { streamId, content: "I'm back!" })
 
     const msg = await t.run(async (ctx) => ctx.db.get(msgId))
@@ -254,20 +260,20 @@ describe("chat.setSlowMode", () => {
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer"))
 
     // Enable 30s slow mode
-    await t.withIdentity({ subject: creatorId }).mutation(api.chat.setSlowMode, {
+    await t.withIdentity({ subject: "did:privy:test-creator" }).mutation(api.chat.setSlowMode, {
       streamId,
       interval: 30,
     })
 
     // First message should succeed
-    await t.withIdentity({ subject: viewerId }).mutation(api.chat.sendMessage, {
+    await t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.sendMessage, {
       streamId,
       content: "First",
     })
 
     // Second immediate message should be rejected
     await expect(
-      t.withIdentity({ subject: viewerId }).mutation(api.chat.sendMessage, {
+      t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.sendMessage, {
         streamId,
         content: "Too fast",
       }),
@@ -279,17 +285,17 @@ describe("chat.setSlowMode", () => {
     const creatorId = await t.run(async (ctx) => seedUser(ctx, "creator"))
     const streamId = await t.run(async (ctx) => seedLiveStream(ctx, creatorId, "creator"))
 
-    await t.withIdentity({ subject: creatorId }).mutation(api.chat.setSlowMode, {
+    await t.withIdentity({ subject: "did:privy:test-creator" }).mutation(api.chat.setSlowMode, {
       streamId,
       interval: 30,
     })
 
     // Creator sends two rapid messages — both should succeed
-    await t.withIdentity({ subject: creatorId }).mutation(api.chat.sendMessage, {
+    await t.withIdentity({ subject: "did:privy:test-creator" }).mutation(api.chat.sendMessage, {
       streamId,
       content: "Creator msg 1",
     })
-    await t.withIdentity({ subject: creatorId }).mutation(api.chat.sendMessage, {
+    await t.withIdentity({ subject: "did:privy:test-creator" }).mutation(api.chat.sendMessage, {
       streamId,
       content: "Creator msg 2",
     })
@@ -305,7 +311,7 @@ describe("chat.setSlowMode", () => {
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer"))
 
     await expect(
-      t.withIdentity({ subject: viewerId }).mutation(api.chat.setSlowMode, {
+      t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.setSlowMode, {
         streamId,
         interval: 30,
       }),
@@ -322,17 +328,17 @@ describe("chat.clearChat", () => {
     const streamId = await t.run(async (ctx) => seedLiveStream(ctx, creatorId, "creator"))
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer"))
 
-    await t.withIdentity({ subject: viewerId }).mutation(api.chat.sendMessage, {
+    await t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.sendMessage, {
       streamId,
       content: "Hello",
     })
-    await t.withIdentity({ subject: viewerId }).mutation(api.chat.sendMessage, {
+    await t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.sendMessage, {
       streamId,
       content: "World",
     })
 
     // Clear
-    await t.withIdentity({ subject: creatorId }).mutation(api.chat.clearChat, { streamId })
+    await t.withIdentity({ subject: "did:privy:test-creator" }).mutation(api.chat.clearChat, { streamId })
 
     const messages = await t.query(api.chat.listMessages, { streamId })
     expect(messages).toHaveLength(0)
@@ -345,7 +351,7 @@ describe("chat.clearChat", () => {
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer"))
 
     await expect(
-      t.withIdentity({ subject: viewerId }).mutation(api.chat.clearChat, { streamId }),
+      t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.chat.clearChat, { streamId }),
     ).rejects.toThrow()
   })
 })
@@ -359,14 +365,14 @@ describe("chat.getModerationState", () => {
     const streamId = await t.run(async (ctx) => seedLiveStream(ctx, creatorId, "creator"))
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer"))
 
-    await t.withIdentity({ subject: creatorId }).mutation(api.chat.moderateUser, {
+    await t.withIdentity({ subject: "did:privy:test-creator" }).mutation(api.chat.moderateUser, {
       streamId,
       userId: viewerId,
       action: "ban",
     })
 
     const state = await t
-      .withIdentity({ subject: viewerId })
+      .withIdentity({ subject: "did:privy:test-viewer" })
       .query(api.chat.getModerationState, { streamId })
 
     expect(state.banned).toBe(true)
@@ -378,7 +384,7 @@ describe("chat.getModerationState", () => {
     const streamId = await t.run(async (ctx) => seedLiveStream(ctx, creatorId, "creator"))
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer"))
 
-    await t.withIdentity({ subject: creatorId }).mutation(api.chat.moderateUser, {
+    await t.withIdentity({ subject: "did:privy:test-creator" }).mutation(api.chat.moderateUser, {
       streamId,
       userId: viewerId,
       action: "timeout",
@@ -386,7 +392,7 @@ describe("chat.getModerationState", () => {
     })
 
     const state = await t
-      .withIdentity({ subject: viewerId })
+      .withIdentity({ subject: "did:privy:test-viewer" })
       .query(api.chat.getModerationState, { streamId })
 
     expect(state.banned).toBe(false)

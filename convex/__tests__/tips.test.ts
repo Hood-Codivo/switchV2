@@ -15,9 +15,14 @@ async function seedUser(
   balance = 0,
 ): Promise<Id<"users">> {
   return ctx.db.insert("users", {
+    privyDid: `did:privy:test-${username}`,
+    walletAddress: `So1anaWa11etAddr3ss${username}`,
     username,
     displayName: username,
+    bio: "",
+    avatarUrl: null,
     pointsBalance: balance,
+    followerCount: 0,
     createdAt: Date.now(),
   })
 }
@@ -49,7 +54,7 @@ describe("tips.sendTip", () => {
     const streamId = await t.run(async (ctx) => seedLiveStream(ctx, creatorId, "creator"))
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer", 500))
 
-    await t.withIdentity({ subject: viewerId }).mutation(api.tips.sendTip, {
+    await t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.tips.sendTip, {
       streamId,
       amount: 50,
       message: "Great stream!",
@@ -89,7 +94,7 @@ describe("tips.sendTip", () => {
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer", 10))
 
     await expect(
-      t.withIdentity({ subject: viewerId }).mutation(api.tips.sendTip, {
+      t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.tips.sendTip, {
         streamId,
         amount: 50,
       }),
@@ -103,7 +108,7 @@ describe("tips.sendTip", () => {
 
     await expect(
       t.mutation(api.tips.sendTip, { streamId, amount: 10 }),
-    ).rejects.toThrow("Sign in")
+    ).rejects.toThrow("Not authenticated")
   })
 
   it("rejects tips on non-live streams", async () => {
@@ -123,7 +128,7 @@ describe("tips.sendTip", () => {
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer", 100))
 
     await expect(
-      t.withIdentity({ subject: viewerId }).mutation(api.tips.sendTip, { streamId, amount: 10 }),
+      t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.tips.sendTip, { streamId, amount: 10 }),
     ).rejects.toThrow("live")
   })
 
@@ -133,7 +138,7 @@ describe("tips.sendTip", () => {
     const streamId = await t.run(async (ctx) => seedLiveStream(ctx, creatorId, "creator"))
 
     await expect(
-      t.withIdentity({ subject: creatorId }).mutation(api.tips.sendTip, { streamId, amount: 10 }),
+      t.withIdentity({ subject: "did:privy:test-creator" }).mutation(api.tips.sendTip, { streamId, amount: 10 }),
     ).rejects.toThrow("Cannot tip yourself")
   })
 
@@ -144,11 +149,11 @@ describe("tips.sendTip", () => {
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer", 100))
 
     await expect(
-      t.withIdentity({ subject: viewerId }).mutation(api.tips.sendTip, { streamId, amount: 0 }),
+      t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.tips.sendTip, { streamId, amount: 0 }),
     ).rejects.toThrow("Invalid")
 
     await expect(
-      t.withIdentity({ subject: viewerId }).mutation(api.tips.sendTip, { streamId, amount: -5 }),
+      t.withIdentity({ subject: "did:privy:test-viewer" }).mutation(api.tips.sendTip, { streamId, amount: -5 }),
     ).rejects.toThrow("Invalid")
   })
 })
@@ -163,8 +168,8 @@ describe("tips.getStreamTipTotal", () => {
     const v1 = await t.run(async (ctx) => seedUser(ctx, "v1", 500))
     const v2 = await t.run(async (ctx) => seedUser(ctx, "v2", 500))
 
-    await t.withIdentity({ subject: v1 }).mutation(api.tips.sendTip, { streamId, amount: 20 })
-    await t.withIdentity({ subject: v2 }).mutation(api.tips.sendTip, { streamId, amount: 30 })
+    await t.withIdentity({ subject: "did:privy:test-v1" }).mutation(api.tips.sendTip, { streamId, amount: 20 })
+    await t.withIdentity({ subject: "did:privy:test-v2" }).mutation(api.tips.sendTip, { streamId, amount: 30 })
 
     const total = await t.query(api.tips.getStreamTipTotal, { streamId })
     expect(total).toBe(50)
@@ -178,7 +183,7 @@ describe("tips.getBalance", () => {
     const t = convexTest(schema, modules)
     const viewerId = await t.run(async (ctx) => seedUser(ctx, "viewer", 400))
 
-    const balance = await t.withIdentity({ subject: viewerId }).query(api.tips.getBalance, {})
+    const balance = await t.withIdentity({ subject: "did:privy:test-viewer" }).query(api.tips.getBalance, {})
     expect(balance).toBe(400)
   })
 

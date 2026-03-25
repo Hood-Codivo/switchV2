@@ -4,8 +4,19 @@ import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { useMutation } from "convex/react"
+import { usePrivy } from "@privy-io/react-auth"
+import type { User as PrivyUser } from "@privy-io/react-auth"
 import { api } from "@/convex/_generated/api"
 import { validateUsername } from "@/convex/lib/username"
+
+function getSolanaWalletAddress(privyUser: PrivyUser | null): string | null {
+  if (!privyUser) return null
+  const solanaWallet = privyUser.linkedAccounts?.find(
+    (a) => a.type === "wallet" && "chainType" in a && a.chainType === "solana",
+  )
+  if (solanaWallet && "address" in solanaWallet) return solanaWallet.address
+  return privyUser.wallet?.address ?? null
+}
 import {
   Dialog,
   DialogContent,
@@ -36,6 +47,7 @@ type Props = {
 
 export function OnboardingDialog({ open, googleName }: Props) {
   const completeOnboarding = useMutation(api.users.completeOnboarding)
+  const { user: privyUser } = usePrivy()
 
   const {
     register,
@@ -53,7 +65,18 @@ export function OnboardingDialog({ open, googleName }: Props) {
 
   async function onSubmit(values: FormValues) {
     try {
-      await completeOnboarding({ username: values.username, displayName: values.displayName })
+      const walletAddress = getSolanaWalletAddress(privyUser)
+
+      if (!walletAddress) {
+        setError("root", { message: "Wallet not ready yet. Please try again." })
+        return
+      }
+
+      await completeOnboarding({
+        username: values.username,
+        displayName: values.displayName,
+        walletAddress,
+      })
     } catch (err) {
       setError("root", {
         message: err instanceof Error ? err.message : "Something went wrong",

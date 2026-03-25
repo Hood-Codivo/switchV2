@@ -11,8 +11,14 @@ const modules = import.meta.glob("../**/*.ts")
 
 async function seedUser(ctx: GenericMutationCtx<DataModel>, username: string) {
   return ctx.db.insert("users", {
+    privyDid: `did:privy:test-${username}`,
+    walletAddress: `So1anaWa11etAddr3ss${username}`,
     username,
     displayName: username,
+    bio: "",
+    avatarUrl: null,
+    pointsBalance: 0,
+    followerCount: 0,
     createdAt: Date.now(),
   })
 }
@@ -53,7 +59,7 @@ describe("listBackstageMessages", () => {
     const sessionId = await t.run(async (ctx) => seedSession(ctx, userId))
     const guestId = await t.run(async (ctx) => seedAdmittedGuest(ctx, sessionId, "Bob"))
 
-    await t.withIdentity({ subject: userId }).mutation(api.backstageChat.sendBackstageMessage, {
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.backstageChat.sendBackstageMessage, {
       sessionId,
       content: "first",
     })
@@ -62,12 +68,12 @@ describe("listBackstageMessages", () => {
       content: "second",
       guestId,
     })
-    await t.withIdentity({ subject: userId }).mutation(api.backstageChat.sendBackstageMessage, {
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.backstageChat.sendBackstageMessage, {
       sessionId,
       content: "third",
     })
 
-    const messages = await t.withIdentity({ subject: userId }).query(api.backstageChat.listBackstageMessages, {
+    const messages = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.backstageChat.listBackstageMessages, {
       sessionId,
     })
 
@@ -83,12 +89,12 @@ describe("listBackstageMessages", () => {
     const otherId = await t.run(async (ctx) => seedUser(ctx, "eve"))
     const sessionId = await t.run(async (ctx) => seedSession(ctx, userId))
 
-    await t.withIdentity({ subject: userId }).mutation(api.backstageChat.sendBackstageMessage, {
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.backstageChat.sendBackstageMessage, {
       sessionId,
       content: "secret",
     })
 
-    const messages = await t.withIdentity({ subject: otherId }).query(api.backstageChat.listBackstageMessages, {
+    const messages = await t.withIdentity({ subject: "did:privy:test-eve" }).query(api.backstageChat.listBackstageMessages, {
       sessionId,
     })
 
@@ -125,7 +131,7 @@ describe("sendBackstageMessage", () => {
     const sessionId = await t.run(async (ctx) => seedSession(ctx, userId))
 
     await expect(
-      t.withIdentity({ subject: userId }).mutation(api.backstageChat.sendBackstageMessage, {
+      t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.backstageChat.sendBackstageMessage, {
         sessionId,
         content: "   ",
       }),
@@ -145,7 +151,7 @@ describe("sendBackstageMessage", () => {
       guestId,
     })
 
-    const messages = await t.withIdentity({ subject: userId }).query(api.backstageChat.listBackstageMessages, {
+    const messages = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.backstageChat.listBackstageMessages, {
       sessionId,
     })
 
@@ -160,12 +166,12 @@ describe("sendBackstageMessage", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const sessionId = await t.run(async (ctx) => seedSession(ctx, userId))
 
-    await t.withIdentity({ subject: userId }).mutation(api.backstageChat.sendBackstageMessage, {
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.backstageChat.sendBackstageMessage, {
       sessionId,
       content: "hello backstage",
     })
 
-    const messages = await t.withIdentity({ subject: userId }).query(api.backstageChat.listBackstageMessages, {
+    const messages = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.backstageChat.listBackstageMessages, {
       sessionId,
     })
 

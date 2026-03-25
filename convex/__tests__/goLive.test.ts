@@ -11,8 +11,14 @@ const modules = import.meta.glob("../**/*.ts")
 
 async function seedUser(ctx: GenericMutationCtx<DataModel>, username: string): Promise<Id<"users">> {
   return ctx.db.insert("users", {
+    privyDid: `did:privy:test-${username}`,
+    walletAddress: `So1anaWa11etAddr3ss${username}`,
     username,
     displayName: username,
+    bio: "",
+    avatarUrl: null,
+    pointsBalance: 0,
+    followerCount: 0,
     createdAt: Date.now(),
   })
 }
@@ -38,7 +44,7 @@ describe("streams.create", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
 
     const streamId = await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, {
         title: "My First Stream",
         category: "Gaming",
@@ -57,12 +63,12 @@ describe("streams.create", () => {
   it("throws if the user has not set a username yet", async () => {
     const t = convexTest(schema, modules)
     // Insert a user without a username (pre-onboarding state)
-    const userId = await t.run(async (ctx) =>
-      ctx.db.insert("users", { displayName: "New User", createdAt: Date.now() }),
+    await t.run(async (ctx) =>
+      ctx.db.insert("users", { privyDid: "did:privy:test-newuser", walletAddress: "So1anaWa11etAddr3ssNewUser" }),
     )
 
     await expect(
-      t.withIdentity({ subject: userId }).mutation(api.streams.create, {
+      t.withIdentity({ subject: "did:privy:test-newuser" }).mutation(api.streams.create, {
         title: "My Stream",
         category: "Gaming",
       }),
@@ -88,11 +94,11 @@ describe("streams.setLive", () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, { title: "Live Test", category: "Gaming" })
 
     await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.setLive, {
         id: streamId,
         playbackUrl: "https://customer-xyz.cloudflarestream.com/abc/manifest/video.m3u8",
@@ -112,11 +118,11 @@ describe("streams.setLive", () => {
     const aliceId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const bobId = await t.run(async (ctx) => seedUser(ctx, "bob"))
     const streamId = await t
-      .withIdentity({ subject: aliceId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, { title: "Alice's Stream", category: "Gaming" })
 
     await expect(
-      t.withIdentity({ subject: bobId }).mutation(api.streams.setLive, {
+      t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.streams.setLive, {
         id: streamId,
         playbackUrl: "https://example.com/manifest.m3u8",
       }),
@@ -127,7 +133,7 @@ describe("streams.setLive", () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, { title: "Test", category: "Gaming" })
 
     await expect(
@@ -146,11 +152,11 @@ describe("streams.setStatus", () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, { title: "Test", category: "Gaming" })
 
     await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.setStatus, { id: streamId, status: "starting" })
 
     const stream = await t.run(async (ctx) => ctx.db.get(streamId))
@@ -161,12 +167,12 @@ describe("streams.setStatus", () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, { title: "Test", category: "Gaming" })
 
     const before = Date.now()
     await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.setStatus, {
         id: streamId,
         status: "ended",
@@ -185,11 +191,11 @@ describe("streams.setStatus", () => {
     const aliceId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const bobId = await t.run(async (ctx) => seedUser(ctx, "bob"))
     const streamId = await t
-      .withIdentity({ subject: aliceId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, { title: "Alice's Stream", category: "Gaming" })
 
     await expect(
-      t.withIdentity({ subject: bobId }).mutation(api.streams.setStatus, {
+      t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.streams.setStatus, {
         id: streamId,
         status: "idle",
       }),
@@ -200,7 +206,7 @@ describe("streams.setStatus", () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, { title: "Test", category: "Gaming" })
 
     await expect(
@@ -216,9 +222,9 @@ describe("streams.getByUsername", () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, { title: "Live Now", category: "Gaming" })
-    await t.withIdentity({ subject: userId }).mutation(api.streams.setLive, {
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.streams.setLive, {
       id: streamId,
       playbackUrl: "https://example.com/manifest.m3u8",
     })
@@ -234,9 +240,9 @@ describe("streams.getByUsername", () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, { title: "Starting Soon", category: "IRL" })
-    await t.withIdentity({ subject: userId }).mutation(api.streams.setStatus, { id: streamId, status: "starting" })
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.streams.setStatus, { id: streamId, status: "starting" })
 
     const result = await t.query(api.streams.getByUsername, { username: "alice" })
 
@@ -248,9 +254,9 @@ describe("streams.getByUsername", () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, { title: "Done", category: "Gaming" })
-    await t.withIdentity({ subject: userId }).mutation(api.streams.setStatus, { id: streamId, status: "ended", endedAt: Date.now() })
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.streams.setStatus, { id: streamId, status: "ended", endedAt: Date.now() })
 
     const result = await t.query(api.streams.getByUsername, { username: "alice" })
 
@@ -273,9 +279,9 @@ describe("streams.getActive", () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, { title: "Active", category: "Music" })
-    await t.withIdentity({ subject: userId }).mutation(api.streams.setLive, {
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.streams.setLive, {
       id: streamId,
       playbackUrl: "https://example.com/manifest.m3u8",
     })
@@ -290,7 +296,7 @@ describe("streams.getActive", () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, { title: "Idle", category: "Gaming" })
 
     const result = await t.query(api.streams.getActive, { userId: userId })
@@ -302,9 +308,9 @@ describe("streams.getActive", () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t
-      .withIdentity({ subject: userId })
+      .withIdentity({ subject: "did:privy:test-alice" })
       .mutation(api.streams.create, { title: "Over", category: "Gaming" })
-    await t.withIdentity({ subject: userId }).mutation(api.streams.setStatus, { id: streamId, status: "ended", endedAt: Date.now() })
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.streams.setStatus, { id: streamId, status: "ended", endedAt: Date.now() })
 
     const result = await t.query(api.streams.getActive, { userId: userId })
 
@@ -320,7 +326,7 @@ describe("streams.heartbeat", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const sessionId = await t.run(async (ctx) => seedSession(ctx, userId))
 
-    await t.withIdentity({ subject: userId }).mutation(api.streams.heartbeat, {})
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.streams.heartbeat, {})
 
     const session = await t.run(async (ctx) => ctx.db.get(sessionId))
     expect(session?.lastHeartbeatAt).toBeGreaterThan(0)
@@ -331,7 +337,7 @@ describe("streams.heartbeat", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
 
     await expect(
-      t.withIdentity({ subject: userId }).mutation(api.streams.heartbeat, {}),
+      t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.streams.heartbeat, {}),
     ).resolves.not.toThrow()
   })
 })

@@ -33,7 +33,7 @@ function HeaderSearch() {
 function ProfileDropdown() {
   const router = useRouter()
   const currentUser = useQuery(api.users.getCurrentUser, {})
-  const avatarSrc = currentUser?.avatarUrl ?? currentUser?.image ?? null
+  const avatarSrc = currentUser?.avatarUrl ?? null
   const initial = (currentUser?.username ?? "?")[0]?.toUpperCase()
 
   return (

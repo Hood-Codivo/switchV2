@@ -1,7 +1,7 @@
 import { v } from "convex/values"
 import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server"
-import { getAuthUserId } from "@convex-dev/auth/server"
-import { internal } from "./_generated/api"
+import { getAuthenticatedUser } from "./auth"
+import { api, internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 
 // ─── Queries ────────────────────────────────────────────────────────────────
@@ -9,8 +9,12 @@ import type { Id } from "./_generated/dataModel"
 export const getActiveSession = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) return null
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      return null
+    }
 
     return ctx.db
       .query("studioSessions")
@@ -74,8 +78,7 @@ export const endStudioSessionRecord = internalMutation({
 export const generateInviteToken = mutation({
   args: { expiresInHours: v.optional(v.number()) },
   handler: async (ctx, { expiresInHours = 24 }): Promise<string> => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const userId = await getAuthenticatedUser(ctx)
 
     const session = await ctx.db
       .query("studioSessions")
@@ -108,8 +111,12 @@ export const getSessionByInviteToken = query({
 export const listSessionGuests = query({
   args: { sessionId: v.id("studioSessions") },
   handler: async (ctx, { sessionId }) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) return []
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      return []
+    }
 
     const session = await ctx.db.get(sessionId)
     if (!session || session.creatorId !== userId) return []
@@ -154,8 +161,7 @@ export const getGuestStatus = query({
 export const rejectGuest = mutation({
   args: { guestId: v.id("studioGuests") },
   handler: async (ctx, { guestId }): Promise<void> => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const userId = await getAuthenticatedUser(ctx)
 
     const guest = await ctx.db.get(guestId)
     if (!guest) throw new Error("Guest not found")
@@ -173,8 +179,7 @@ export const rejectGuest = mutation({
 export const updateStage = mutation({
   args: { stageParticipantIds: v.array(v.string()), stageLayoutId: v.string() },
   handler: async (ctx, { stageParticipantIds, stageLayoutId }) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const userId = await getAuthenticatedUser(ctx)
     const session = await ctx.db
       .query("studioSessions")
       .withIndex("by_creator_and_status", (q) =>
@@ -202,8 +207,7 @@ export const getSessionStage = query({
 export const removeGuest = mutation({
   args: { guestId: v.id("studioGuests") },
   handler: async (ctx, { guestId }): Promise<void> => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const userId = await getAuthenticatedUser(ctx)
 
     const guest = await ctx.db.get(guestId)
     if (!guest) throw new Error("Guest not found")
@@ -259,8 +263,11 @@ export const admitGuestRecord = internalMutation({
 export const createStudioSession = action({
   args: {},
   handler: async (ctx): Promise<{ authToken: string; roomId: string; sessionId: Id<"studioSessions"> }> => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error("Not authenticated")
+    const userRecord = await ctx.runQuery(api.users.getCurrentUser, {})
+    if (!userRecord) throw new Error("Complete your profile first")
+    const userId = userRecord._id
 
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID
     const apiToken = process.env.CLOUDFLARE_API_TOKEN
@@ -320,8 +327,11 @@ export const createStudioSession = action({
 export const endStudioSession = action({
   args: {},
   handler: async (ctx): Promise<void> => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error("Not authenticated")
+    const userRecord = await ctx.runQuery(api.users.getCurrentUser, {})
+    if (!userRecord) throw new Error("Not authenticated")
+    const userId = userRecord._id
 
     await ctx.runMutation(internal.studio.endStudioSessionRecord, {
       creatorId: userId as Id<"users">,
@@ -332,8 +342,11 @@ export const endStudioSession = action({
 export const admitGuest = action({
   args: { guestId: v.id("studioGuests") },
   handler: async (ctx, { guestId }): Promise<void> => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error("Not authenticated")
+    const userRecord = await ctx.runQuery(api.users.getCurrentUser, {})
+    if (!userRecord) throw new Error("Not authenticated")
+    const userId = userRecord._id
 
     // Verify the caller owns the session this guest belongs to
     const guest = await ctx.runQuery(internal.studio.getGuestWithSession, { guestId })
