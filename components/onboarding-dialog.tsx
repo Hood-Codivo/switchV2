@@ -8,15 +8,6 @@ import { usePrivy } from "@privy-io/react-auth"
 import type { User as PrivyUser } from "@privy-io/react-auth"
 import { api } from "@/convex/_generated/api"
 import { validateUsername } from "@/convex/lib/username"
-
-function getSolanaWalletAddress(privyUser: PrivyUser | null): string | null {
-  if (!privyUser) return null
-  const solanaWallet = privyUser.linkedAccounts?.find(
-    (a) => a.type === "wallet" && "chainType" in a && a.chainType === "solana",
-  )
-  if (solanaWallet && "address" in solanaWallet) return solanaWallet.address
-  return privyUser.wallet?.address ?? null
-}
 import {
   Dialog,
   DialogContent,
@@ -27,6 +18,15 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
+
+function getSolanaWalletAddress(privyUser: PrivyUser | null): string | null {
+  if (!privyUser) return null
+  const solanaWallet = privyUser.linkedAccounts?.find(
+    (a) => a.type === "wallet" && "chainType" in a && a.chainType === "solana",
+  )
+  if (solanaWallet && "address" in solanaWallet) return solanaWallet.address
+  return privyUser.wallet?.address ?? null
+}
 
 const schema = z.object({
   displayName: z.string().min(1, "Display name is required"),

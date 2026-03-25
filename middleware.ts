@@ -2,7 +2,14 @@ import { NextRequest, NextResponse } from "next/server"
 import { verifyAccessToken } from "@privy-io/node"
 import { createRemoteJWKSet } from "jose"
 
-const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID!
+function requireEnv(name: string): string {
+  const value = process.env[name]
+  if (!value) throw new Error(`${name} is not set — middleware cannot verify auth tokens`)
+  return value
+}
+
+const PRIVY_APP_ID = requireEnv("NEXT_PUBLIC_PRIVY_APP_ID")
+
 const PRIVY_JWKS = createRemoteJWKSet(
   new URL(`https://auth.privy.io/api/v1/apps/${PRIVY_APP_ID}/.well-known/jwks.json`),
 )
