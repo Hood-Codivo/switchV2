@@ -3,7 +3,7 @@
 import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useConvexAuth, useConvex, useMutation, useQuery } from "convex/react"
+import { useConvex, useMutation, useQuery } from "convex/react"
 import { usePrivy } from "@privy-io/react-auth"
 import { api } from "@/convex/_generated/api"
 import { Search, ChevronDown, User, Video, Bell, Check } from "lucide-react"
@@ -142,7 +142,8 @@ function NotificationBell() {
 }
 
 export function SiteHeader() {
-  const { isAuthenticated, isLoading } = useConvexAuth()
+  const { ready, authenticated: isAuthenticated } = usePrivy()
+  const isLoading = !ready
   const router = useRouter()
 
   return (

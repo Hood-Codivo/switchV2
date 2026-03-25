@@ -1,20 +1,20 @@
 "use client"
 
-import { useConvexAuth } from "convex/react"
+import { usePrivy } from "@privy-io/react-auth"
 import { useRouter } from "next/navigation"
 import { useEffect } from "react"
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useConvexAuth()
+  const { ready, authenticated } = usePrivy()
   const router = useRouter()
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
+    if (ready && !authenticated) {
       router.replace("/sign-in")
     }
-  }, [isAuthenticated, isLoading, router])
+  }, [ready, authenticated, router])
 
-  if (isLoading) {
+  if (!ready) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <div className="size-8 animate-pulse rounded-full bg-zinc-800" />
@@ -22,7 +22,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     )
   }
 
-  if (!isAuthenticated) return null
+  if (!authenticated) return null
 
   return <>{children}</>
 }

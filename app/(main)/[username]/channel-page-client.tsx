@@ -1,7 +1,7 @@
 "use client"
 
 import { useQuery, useMutation } from "convex/react"
-import { useConvexAuth } from "convex/react"
+import { usePrivy } from "@privy-io/react-auth"
 import { useRouter } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import type { Doc } from "@/convex/_generated/dataModel"
@@ -35,7 +35,7 @@ function FollowButton({
   isOwnChannel: boolean
   followerCount: number
 }) {
-  const { isAuthenticated } = useConvexAuth()
+  const { authenticated: isAuthenticated } = usePrivy()
   const router = useRouter()
   const isFollowing = useQuery(api.follows.getFollowState, { creatorId })
   const followUser = useMutation(api.follows.followUser)

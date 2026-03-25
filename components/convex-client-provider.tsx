@@ -25,7 +25,11 @@ function usePrivyAuth() {
       isAuthenticated: authenticated,
       fetchAccessToken: async () => {
         if (!authenticated) return null
-        return await getAccessToken()
+        const token = await getAccessToken()
+        if (process.env.NODE_ENV === "development") {
+          console.log("[privy-auth] token fetched:", token ? `${token.slice(0, 20)}...` : "null")
+        }
+        return token
       },
     }),
     [ready, authenticated, getAccessToken],
