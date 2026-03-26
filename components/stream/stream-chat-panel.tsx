@@ -6,17 +6,28 @@ import { useConvexAuth } from "convex/react"
 import { useRouter } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { MessageCircle, UsersRound, Smile, Send, Ban, Clock, Trash2 } from "lucide-react"
+import { MessageCircle, UsersRound, Smile, Send, Ban, Clock, Trash2, X, Coins } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 type StreamChatPanelProps = {
   streamId: Id<"streams">
   creatorId: Id<"users">
   isCreator: boolean
+  showTipPanel?: boolean
+  onCloseTipPanel?: () => void
 }
 
-export function StreamChatPanel({ streamId, creatorId, isCreator }: StreamChatPanelProps) {
+export function StreamChatPanel({ streamId, creatorId, isCreator, showTipPanel, onCloseTipPanel }: StreamChatPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "participants">("chat")
+
+  // When Send Tip is clicked, replace the chat with the tip panel
+  if (showTipPanel) {
+    return (
+      <div className="flex h-full flex-col border border-border/65 bg-card">
+        <SendTipPanel streamId={streamId} onClose={onCloseTipPanel ?? (() => {})} />
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full flex-col border border-border/65 bg-card">
@@ -56,6 +67,128 @@ export function StreamChatPanel({ streamId, creatorId, isCreator }: StreamChatPa
         </div>
       )}
     </div>
+  )
+}
+
+// ─── Send Tip Panel ───────────────────────────────────────────────────────────
+
+const TIP_PRESETS = [5, 10, 20, 50, 100, 1000]
+
+function SendTipPanel({ streamId, onClose }: { streamId: Id<"streams">; onClose: () => void }) {
+  const { isAuthenticated } = useConvexAuth()
+  const router = useRouter()
+  const balance = useQuery(api.tips.getBalance, {})
+  const sendTip = useMutation(api.tips.sendTip)
+  const [selectedAmount, setSelectedAmount] = useState(5)
+  const [customAmount, setCustomAmount] = useState("")
+  const [error, setError] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
+
+  const amount = customAmount ? parseInt(customAmount, 10) || 0 : selectedAmount
+
+  async function handleSend() {
+    if (amount <= 0) return
+    setSending(true)
+    setError(null)
+    try {
+      await sendTip({ streamId, amount })
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send tip")
+    } finally {
+      setSending(false)
+    }
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6">
+        <Coins className="size-8 text-zinc-600" />
+        <p className="text-sm text-zinc-400">Sign in to send tips</p>
+        <button
+          onClick={() => router.push("/sign-in")}
+          className="rounded-full bg-red-500 px-6 py-2 text-sm font-medium text-white hover:bg-red-600"
+        >
+          Sign In
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+        <span className="text-sm font-semibold text-zinc-100">Send Tip</span>
+        <button onClick={onClose} className="text-zinc-400 hover:text-zinc-200">
+          <X className="size-4" />
+        </button>
+      </div>
+
+      {/* Balance top */}
+      <div className="flex items-center gap-2 px-4 py-3">
+        <Coins className="size-4 text-emerald-400" />
+        <span className="text-sm text-zinc-400">Balance:</span>
+        <span className="text-sm font-semibold text-emerald-400">
+          ${balance?.toLocaleString() ?? "0"}
+        </span>
+      </div>
+
+      {/* Spacer */}
+      <div className="flex-1" />
+
+      {/* Error */}
+      {error && <p className="px-4 pb-2 text-xs text-red-400">{error}</p>}
+
+      {/* Preset amounts */}
+      <div className="flex flex-wrap gap-2 px-4 pb-3">
+        {TIP_PRESETS.map((preset) => (
+          <button
+            key={preset}
+            onClick={() => { setSelectedAmount(preset); setCustomAmount("") }}
+            className={cn(
+              "rounded-lg border px-4 py-1.5 text-sm font-medium transition-colors",
+              !customAmount && selectedAmount === preset
+                ? "border-red-500 bg-red-500/10 text-red-400"
+                : "border-zinc-700 text-zinc-300 hover:border-zinc-500",
+            )}
+          >
+            {preset}
+          </button>
+        ))}
+      </div>
+
+      {/* Custom amount */}
+      <div className="px-4 pb-3">
+        <label className="mb-1 block text-xs text-zinc-500">Custom amount:</label>
+        <input
+          type="number"
+          min={1}
+          value={customAmount}
+          onChange={(e) => setCustomAmount(e.target.value)}
+          placeholder={String(selectedAmount)}
+          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-center text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none"
+        />
+      </div>
+
+      {/* Bottom: balance + send */}
+      <div className="flex items-center justify-between border-t border-zinc-800 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <Coins className="size-4 text-emerald-400" />
+          <span className="text-sm text-zinc-400">Balance:</span>
+          <span className="text-sm font-semibold text-emerald-400">
+            ${balance?.toLocaleString() ?? "0"}
+          </span>
+        </div>
+        <button
+          onClick={handleSend}
+          disabled={sending || amount <= 0 || (balance !== null && balance !== undefined && amount > balance)}
+          className="rounded-full bg-red-500 px-5 py-2 text-xs font-semibold text-white transition-colors hover:bg-red-600 disabled:opacity-40"
+        >
+          {sending ? "Sending…" : "Send Tip"}
+        </button>
+      </div>
+    </>
   )
 }
 
