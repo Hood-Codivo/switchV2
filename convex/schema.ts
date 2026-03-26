@@ -51,6 +51,8 @@ export default defineSchema({
     endedAt: v.optional(v.number()),
     viewerCount: v.number(),
     peakViewerCount: v.number(),
+    slowModeInterval: v.optional(v.number()), // seconds between messages, 0 or absent = off
+    chatClearedAt: v.optional(v.number()),    // timestamp; messages before this are hidden
   })
     .index("by_status", ["status"])
     .index("by_creator", ["creatorId"])
@@ -103,6 +105,25 @@ export default defineSchema({
   })
     .index("by_session", ["sessionId"])
     .index("by_session_and_status", ["sessionId", "status"]),
+  chatMessages: defineTable({
+    streamId: v.id("streams"),
+    userId: v.id("users"),
+    username: v.string(),
+    content: v.string(),
+    isHidden: v.boolean(),
+    createdAt: v.number(),
+  })
+    .index("by_stream", ["streamId"])
+    .index("by_stream_and_created", ["streamId", "createdAt"])
+    .index("by_user_and_stream", ["userId", "streamId"]),
+  chatModerations: defineTable({
+    streamId: v.id("streams"),
+    userId: v.id("users"),
+    type: v.union(v.literal("ban"), v.literal("timeout")),
+    expiresAt: v.optional(v.number()), // undefined = permanent (ban)
+    createdAt: v.number(),
+  })
+    .index("by_stream_and_user", ["streamId", "userId"]),
   backstageMessages: defineTable({
     sessionId: v.id("studioSessions"),
     senderType: v.union(v.literal("creator"), v.literal("guest")),
