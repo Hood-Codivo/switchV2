@@ -11,11 +11,14 @@ const modules = import.meta.glob("../**/*.ts")
 
 async function seedUser(ctx: GenericMutationCtx<DataModel>, username: string) {
   return ctx.db.insert("users", {
+    privyDid: `did:privy:test-${username}`,
+    walletAddress: `7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV${username}`,
     username,
     displayName: username,
     bio: "",
     avatarUrl: null,
     pointsBalance: 0,
+    followerCount: 0,
     createdAt: Date.now(),
   })
 }
@@ -45,7 +48,7 @@ describe("getActiveSession", () => {
     const t = convexTest(schema, modules)
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
 
-    const result = await t.withIdentity({ subject: userId }).query(api.studio.getActiveSession, {})
+    const result = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.studio.getActiveSession, {})
 
     expect(result).toBeNull()
   })
@@ -62,7 +65,7 @@ describe("getActiveSession", () => {
       }),
     )
 
-    const result = await t.withIdentity({ subject: userId }).query(api.studio.getActiveSession, {})
+    const result = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.studio.getActiveSession, {})
 
     expect(result).not.toBeNull()
     expect(result?.cloudflareRoomId).toBe("cf-room-abc")
@@ -78,7 +81,7 @@ describe("getActiveSession", () => {
       seedStudioSession(ctx, { creatorId: userId, status: "ended" }),
     )
 
-    const result = await t.withIdentity({ subject: userId }).query(api.studio.getActiveSession, {})
+    const result = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.studio.getActiveSession, {})
 
     expect(result).toBeNull()
   })
@@ -98,7 +101,7 @@ describe("getActiveSession", () => {
 
     await t.run(async (ctx) => seedStudioSession(ctx, { creatorId: bob }))
 
-    const result = await t.withIdentity({ subject: alice }).query(api.studio.getActiveSession, {})
+    const result = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.studio.getActiveSession, {})
 
     expect(result).toBeNull()
   })
@@ -120,7 +123,7 @@ describe("storeStudioSession", () => {
     expect(sessionId).toBeDefined()
 
     // Verify the session is now retrievable
-    const result = await t.withIdentity({ subject: userId }).query(api.studio.getActiveSession, {})
+    const result = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.studio.getActiveSession, {})
     expect(result?.cloudflareRoomId).toBe("cf-room-new")
   })
 
@@ -143,7 +146,7 @@ describe("storeStudioSession", () => {
     })
 
     // Only the new session should be active
-    const result = await t.withIdentity({ subject: userId }).query(api.studio.getActiveSession, {})
+    const result = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.studio.getActiveSession, {})
     expect(result?.cloudflareRoomId).toBe("cf-room-new")
   })
 })
@@ -165,7 +168,7 @@ describe("endStudioSessionRecord", () => {
       creatorId: userId as DataModel["studioSessions"]["document"]["creatorId"],
     })
 
-    const result = await t.withIdentity({ subject: userId }).query(api.studio.getActiveSession, {})
+    const result = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.studio.getActiveSession, {})
     expect(result).toBeNull()
   })
 
@@ -230,12 +233,12 @@ describe("generateInviteToken", () => {
       creatorAuthToken: "token-1",
     })
 
-    const token = await t.withIdentity({ subject: userId }).mutation(api.studio.generateInviteToken, {})
+    const token = await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.studio.generateInviteToken, {})
 
     expect(typeof token).toBe("string")
     expect(token.length).toBeGreaterThan(0)
 
-    const session = await t.withIdentity({ subject: userId }).query(api.studio.getActiveSession, {})
+    const session = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.studio.getActiveSession, {})
     expect(session?.inviteToken).toBe(token)
     expect(session?.inviteTokenExpiresAt).toBeGreaterThan(Date.now())
   })
@@ -250,8 +253,8 @@ describe("generateInviteToken", () => {
     })
 
     const before = Date.now()
-    await t.withIdentity({ subject: userId }).mutation(api.studio.generateInviteToken, { expiresInHours: 1 })
-    const session = await t.withIdentity({ subject: userId }).query(api.studio.getActiveSession, {})
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.studio.generateInviteToken, { expiresInHours: 1 })
+    const session = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.studio.getActiveSession, {})
 
     const oneHourMs = 60 * 60 * 1000
     expect(session?.inviteTokenExpiresAt).toBeGreaterThanOrEqual(before + oneHourMs)
@@ -263,7 +266,7 @@ describe("generateInviteToken", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
 
     await expect(
-      t.withIdentity({ subject: userId }).mutation(api.studio.generateInviteToken, {}),
+      t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.studio.generateInviteToken, {}),
     ).rejects.toThrow("No active studio session")
   })
 
@@ -342,7 +345,7 @@ describe("listSessionGuests", () => {
     await t.mutation(api.studio.requestGuestJoin, { token: "valid-token", displayName: "Bob" })
     await t.mutation(api.studio.requestGuestJoin, { token: "valid-token", displayName: "Carol" })
 
-    const guests = await t.withIdentity({ subject: userId }).query(api.studio.listSessionGuests, {
+    const guests = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.studio.listSessionGuests, {
       sessionId,
     })
 
@@ -360,7 +363,7 @@ describe("listSessionGuests", () => {
       creatorAuthToken: "token-1",
     })
 
-    const guests = await t.withIdentity({ subject: userId }).query(api.studio.listSessionGuests, {
+    const guests = await t.withIdentity({ subject: "did:privy:test-alice" }).query(api.studio.listSessionGuests, {
       sessionId,
     })
 
@@ -390,7 +393,7 @@ describe("listSessionGuests", () => {
       creatorAuthToken: "token-1",
     })
 
-    const guests = await t.withIdentity({ subject: bob }).query(api.studio.listSessionGuests, { sessionId })
+    const guests = await t.withIdentity({ subject: "did:privy:test-bob" }).query(api.studio.listSessionGuests, { sessionId })
     expect(guests).toEqual([])
   })
 })
@@ -462,7 +465,7 @@ describe("rejectGuest", () => {
     })
     const guestId = await t.mutation(api.studio.requestGuestJoin, { token: "valid-token", displayName: "Bob" })
 
-    await t.withIdentity({ subject: userId }).mutation(api.studio.rejectGuest, { guestId })
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.studio.rejectGuest, { guestId })
 
     const guest = await t.run(async (ctx) => ctx.db.get(guestId))
     expect(guest?.status).toBe("rejected")
@@ -483,7 +486,7 @@ describe("rejectGuest", () => {
     const guestId = await t.mutation(api.studio.requestGuestJoin, { token: "tok", displayName: "Eve" })
 
     await expect(
-      t.withIdentity({ subject: bob }).mutation(api.studio.rejectGuest, { guestId }),
+      t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.studio.rejectGuest, { guestId }),
     ).rejects.toThrow()
   })
 })
@@ -504,7 +507,7 @@ describe("removeGuest", () => {
     // Manually admit the guest (bypass the action)
     await t.run(async (ctx) => ctx.db.patch(guestId, { status: "admitted", rtkAuthToken: "guest-rtk-token" }))
 
-    await t.withIdentity({ subject: userId }).mutation(api.studio.removeGuest, { guestId })
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.studio.removeGuest, { guestId })
 
     const guest = await t.run(async (ctx) => ctx.db.get(guestId))
     expect(guest?.status).toBe("removed")
@@ -525,7 +528,7 @@ describe("removeGuest", () => {
     const guestId = await t.mutation(api.studio.requestGuestJoin, { token: "tok", displayName: "Eve" })
 
     await expect(
-      t.withIdentity({ subject: bob }).mutation(api.studio.removeGuest, { guestId }),
+      t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.studio.removeGuest, { guestId }),
     ).rejects.toThrow()
   })
 })
@@ -561,7 +564,7 @@ describe("admitGuest", () => {
     })
     const guestId = await t.mutation(api.studio.requestGuestJoin, { token: "valid-token", displayName: "Bob" })
 
-    await t.withIdentity({ subject: userId }).action(api.studio.admitGuest, { guestId })
+    await t.withIdentity({ subject: "did:privy:test-alice" }).action(api.studio.admitGuest, { guestId })
 
     const guest = await t.run(async (ctx) => ctx.db.get(guestId))
     expect(guest?.status).toBe("admitted")
@@ -597,7 +600,7 @@ describe("admitGuest", () => {
     const guestId = await t.mutation(api.studio.requestGuestJoin, { token: "tok", displayName: "Eve" })
 
     await expect(
-      t.withIdentity({ subject: bob }).action(api.studio.admitGuest, { guestId }),
+      t.withIdentity({ subject: "did:privy:test-bob" }).action(api.studio.admitGuest, { guestId }),
     ).rejects.toThrow()
   })
 })

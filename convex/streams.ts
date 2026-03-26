@@ -1,6 +1,6 @@
 import { v } from "convex/values"
 import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server"
-import { getAuthUserId } from "@convex-dev/auth/server"
+import { getAuthenticatedUser } from "./auth"
 import { api, internal } from "./_generated/api"
 import { categoryValidator, streamStatusValidator } from "./schema"
 
@@ -46,8 +46,7 @@ export const create = mutation({
     category: categoryValidator,
   },
   handler: async (ctx, { title, category }) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const userId = await getAuthenticatedUser(ctx)
 
     const user = await ctx.db.get(userId)
     if (!user?.username) throw new Error("Complete your profile before going live")
@@ -72,8 +71,7 @@ export const setLive = mutation({
     playbackUrl: v.string(),
   },
   handler: async (ctx, { id, playbackUrl }) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const userId = await getAuthenticatedUser(ctx)
 
     const stream = await ctx.db.get(id)
     if (!stream) throw new Error("Stream not found")
@@ -104,8 +102,7 @@ export const setStatus = mutation({
     endedAt: v.optional(v.number()),
   },
   handler: async (ctx, { id, status, endedAt }) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const userId = await getAuthenticatedUser(ctx)
 
     const stream = await ctx.db.get(id)
     if (!stream) throw new Error("Stream not found")
@@ -126,8 +123,12 @@ export const setStatus = mutation({
 export const heartbeat = mutation({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) return
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      return
+    }
     const session = await ctx.db
       .query("studioSessions")
       .withIndex("by_creator_and_status", (q) => q.eq("creatorId", userId).eq("status", "active"))
@@ -234,8 +235,13 @@ export const goLive = action({
     category: categoryValidator,
   },
   handler: async (ctx, { title, category }): Promise<{ streamId: string }> => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error("Not authenticated")
+
+    // Resolve the Privy DID to a Convex user via getCurrentUser
+    const userRecord = await ctx.runQuery(api.users.getCurrentUser, {})
+    if (!userRecord) throw new Error("Complete your profile before going live")
+    const userId = userRecord._id
 
     const session = await ctx.runQuery(internal.streams.getActiveSessionForCreator, { userId })
     if (!session) throw new Error("No active studio session — open the studio first")
@@ -302,7 +308,6 @@ export const goLive = action({
       await ctx.runMutation(api.streams.setLive, { id: streamId, playbackUrl })
 
       // Fan out go-live notifications to all followers
-      const userRecord = await ctx.runQuery(api.users.getCurrentUser, {})
       await ctx.runMutation(internal.notifications.fanOutGoLiveNotifications, {
         streamId,
         creatorId: userId,
@@ -325,8 +330,12 @@ export const goLive = action({
 export const endLivestream = action({
   args: { streamId: v.id("streams") },
   handler: async (ctx, { streamId }) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error("Not authenticated")
+
+    const userRecord = await ctx.runQuery(api.users.getCurrentUser, {})
+    if (!userRecord) throw new Error("Not authenticated")
+    const userId = userRecord._id
 
     const session = await ctx.runQuery(internal.streams.getActiveSessionForCreator, { userId })
     if (!session) throw new Error("No active studio session")

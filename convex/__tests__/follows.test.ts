@@ -14,11 +14,14 @@ async function seedUser(
   overrides: { username: string; displayName?: string },
 ) {
   return ctx.db.insert("users", {
+    privyDid: `did:privy:test-${overrides.username}`,
+    walletAddress: `7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV${overrides.username}`,
     username: overrides.username,
     displayName: overrides.displayName ?? overrides.username,
     bio: "",
     avatarUrl: null,
     pointsBalance: 0,
+    followerCount: 0,
     createdAt: Date.now(),
   })
 }
@@ -38,7 +41,7 @@ describe("follows.followUser", () => {
     const t = convexTest(schema, modules)
     const aliceId = await t.run(async (ctx) => seedUser(ctx, { username: "alice" }))
     await expect(
-      t.withIdentity({ subject: aliceId }).mutation(api.follows.followUser, { creatorId: aliceId }),
+      t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.follows.followUser, { creatorId: aliceId }),
     ).rejects.toThrow("Cannot follow yourself")
   })
 
@@ -47,8 +50,8 @@ describe("follows.followUser", () => {
     const aliceId = await t.run(async (ctx) => seedUser(ctx, { username: "alice" }))
     const bobId = await t.run(async (ctx) => seedUser(ctx, { username: "bob" }))
 
-    await t.withIdentity({ subject: bobId }).mutation(api.follows.followUser, { creatorId: aliceId })
-    await t.withIdentity({ subject: bobId }).mutation(api.follows.followUser, { creatorId: aliceId })
+    await t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.follows.followUser, { creatorId: aliceId })
+    await t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.follows.followUser, { creatorId: aliceId })
 
     const page = await t.query(api.follows.getChannelPage, { username: "alice" })
     expect(page?.followerCount).toBe(1)
@@ -63,8 +66,8 @@ describe("follows.unfollowUser", () => {
     const aliceId = await t.run(async (ctx) => seedUser(ctx, { username: "alice" }))
     const bobId = await t.run(async (ctx) => seedUser(ctx, { username: "bob" }))
 
-    await t.withIdentity({ subject: bobId }).mutation(api.follows.followUser, { creatorId: aliceId })
-    await t.withIdentity({ subject: bobId }).mutation(api.follows.unfollowUser, { creatorId: aliceId })
+    await t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.follows.followUser, { creatorId: aliceId })
+    await t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.follows.unfollowUser, { creatorId: aliceId })
 
     const page = await t.query(api.follows.getChannelPage, { username: "alice" })
     expect(page?.followerCount).toBe(0)
@@ -76,7 +79,7 @@ describe("follows.unfollowUser", () => {
     const bobId = await t.run(async (ctx) => seedUser(ctx, { username: "bob" }))
 
     await expect(
-      t.withIdentity({ subject: bobId }).mutation(api.follows.unfollowUser, { creatorId: aliceId }),
+      t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.follows.unfollowUser, { creatorId: aliceId }),
     ).resolves.not.toThrow()
   })
 })
@@ -90,7 +93,7 @@ describe("follows.getFollowState", () => {
     const bobId = await t.run(async (ctx) => seedUser(ctx, { username: "bob" }))
 
     const state = await t
-      .withIdentity({ subject: bobId })
+      .withIdentity({ subject: "did:privy:test-bob" })
       .query(api.follows.getFollowState, { creatorId: aliceId })
     expect(state).toBe(false)
   })
@@ -100,10 +103,10 @@ describe("follows.getFollowState", () => {
     const aliceId = await t.run(async (ctx) => seedUser(ctx, { username: "alice" }))
     const bobId = await t.run(async (ctx) => seedUser(ctx, { username: "bob" }))
 
-    await t.withIdentity({ subject: bobId }).mutation(api.follows.followUser, { creatorId: aliceId })
+    await t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.follows.followUser, { creatorId: aliceId })
 
     const state = await t
-      .withIdentity({ subject: bobId })
+      .withIdentity({ subject: "did:privy:test-bob" })
       .query(api.follows.getFollowState, { creatorId: aliceId })
     expect(state).toBe(true)
   })
@@ -113,11 +116,11 @@ describe("follows.getFollowState", () => {
     const aliceId = await t.run(async (ctx) => seedUser(ctx, { username: "alice" }))
     const bobId = await t.run(async (ctx) => seedUser(ctx, { username: "bob" }))
 
-    await t.withIdentity({ subject: bobId }).mutation(api.follows.followUser, { creatorId: aliceId })
-    await t.withIdentity({ subject: bobId }).mutation(api.follows.unfollowUser, { creatorId: aliceId })
+    await t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.follows.followUser, { creatorId: aliceId })
+    await t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.follows.unfollowUser, { creatorId: aliceId })
 
     const state = await t
-      .withIdentity({ subject: bobId })
+      .withIdentity({ subject: "did:privy:test-bob" })
       .query(api.follows.getFollowState, { creatorId: aliceId })
     expect(state).toBe(false)
   })
@@ -157,7 +160,7 @@ describe("follows.getChannelPage", () => {
     const aliceId = await t.run(async (ctx) => seedUser(ctx, { username: "alice" }))
     const bobId = await t.run(async (ctx) => seedUser(ctx, { username: "bob" }))
 
-    await t.withIdentity({ subject: bobId }).mutation(api.follows.followUser, { creatorId: aliceId })
+    await t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.follows.followUser, { creatorId: aliceId })
 
     const page = await t.query(api.follows.getChannelPage, { username: "alice" })
     expect(page?.followerCount).toBe(1)

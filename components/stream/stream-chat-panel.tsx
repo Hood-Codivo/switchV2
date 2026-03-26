@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { useQuery, useMutation } from "convex/react"
-import { useConvexAuth } from "convex/react"
+import { usePrivy } from "@privy-io/react-auth"
 import { useRouter } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -75,7 +75,7 @@ export function StreamChatPanel({ streamId, creatorId, isCreator, showTipPanel, 
 const TIP_PRESETS = [5, 10, 20, 50, 100, 1000]
 
 function SendTipPanel({ streamId, onClose }: { streamId: Id<"streams">; onClose: () => void }) {
-  const { isAuthenticated } = useConvexAuth()
+  const { authenticated: isAuthenticated } = usePrivy()
   const router = useRouter()
   const balance = useQuery(api.tips.getBalance, {})
   const sendTip = useMutation(api.tips.sendTip)
@@ -345,7 +345,7 @@ function ChatInput({
   disabled: boolean
   isCreator: boolean
 }) {
-  const { isAuthenticated } = useConvexAuth()
+  const { authenticated: isAuthenticated } = usePrivy()
   const router = useRouter()
   const sendMessage = useMutation(api.chat.sendMessage)
   const clearChat = useMutation(api.chat.clearChat)

@@ -1,10 +1,19 @@
 "use client"
 
-import { useAuthActions } from "@convex-dev/auth/react"
+import { usePrivy } from "@privy-io/react-auth"
+import { useRouter } from "next/navigation"
+import { useEffect } from "react"
 import { Button } from "@/components/ui/button"
 
 export default function SignInPage() {
-  const { signIn } = useAuthActions()
+  const { login, ready, authenticated } = usePrivy()
+  const router = useRouter()
+
+  useEffect(() => {
+    if (ready && authenticated) {
+      router.replace("/dashboard")
+    }
+  }, [ready, authenticated, router])
 
   return (
     <div className="dark flex min-h-screen items-center justify-center bg-background">
@@ -21,7 +30,8 @@ export default function SignInPage() {
         <Button
           className="w-full"
           variant="outline"
-          onClick={() => signIn("google", { redirectTo: "/dashboard" })}
+          disabled={!ready}
+          onClick={() => login()}
         >
           <GoogleIcon />
           Continue with Google

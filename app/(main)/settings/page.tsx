@@ -1,5 +1,6 @@
 "use client"
 
+import { AuthGuard } from "@/components/auth-guard"
 import { useQuery, useMutation } from "convex/react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -92,6 +93,14 @@ function ProfileForm({ user }: { user: Doc<"users"> }) {
 }
 
 export default function SettingsPage() {
+  return (
+    <AuthGuard>
+      <SettingsContent />
+    </AuthGuard>
+  )
+}
+
+function SettingsContent() {
   const currentUser = useQuery(api.users.getCurrentUser, {})
 
   if (currentUser === undefined) {

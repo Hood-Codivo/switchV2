@@ -1,6 +1,6 @@
 import { v } from "convex/values"
 import { internalMutation, mutation, query } from "./_generated/server"
-import { getAuthUserId } from "@convex-dev/auth/server"
+import { getAuthenticatedUser } from "./auth"
 import { internal } from "./_generated/api"
 
 // ─── list ─────────────────────────────────────────────────────────────────────
@@ -8,8 +8,12 @@ import { internal } from "./_generated/api"
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) return []
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      return []
+    }
 
     return ctx.db
       .query("notifications")
@@ -24,8 +28,12 @@ export const list = query({
 export const getUnreadCount = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) return 0
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      return 0
+    }
 
     const unread = await ctx.db
       .query("notifications")
@@ -41,8 +49,7 @@ export const getUnreadCount = query({
 export const markRead = mutation({
   args: { notificationId: v.id("notifications") },
   handler: async (ctx, { notificationId }) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const userId = await getAuthenticatedUser(ctx)
 
     const notification = await ctx.db.get(notificationId)
     if (!notification) throw new Error("Notification not found")
@@ -57,8 +64,7 @@ export const markRead = mutation({
 export const markAllRead = mutation({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const userId = await getAuthenticatedUser(ctx)
 
     const unread = await ctx.db
       .query("notifications")
@@ -78,8 +84,7 @@ export const savePushSubscription = mutation({
     authKey: v.string(),
   },
   handler: async (ctx, { endpoint, p256dhKey, authKey }) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Not authenticated")
+    const userId = await getAuthenticatedUser(ctx)
 
     // Deduplicate by endpoint — replace if already exists
     const existing = await ctx.db

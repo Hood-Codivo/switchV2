@@ -1,6 +1,6 @@
 import { v } from "convex/values"
 import { mutation, query } from "./_generated/server"
-import { getAuthUserId } from "@convex-dev/auth/server"
+import { getAuthenticatedUser } from "./auth"
 
 // ─── sendTip ──────────────────────────────────────────────────────────────────
 
@@ -11,8 +11,7 @@ export const sendTip = mutation({
     message: v.optional(v.string()),
   },
   handler: async (ctx, { streamId, amount, message }) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Sign in to send tips")
+    const userId = await getAuthenticatedUser(ctx)
 
     if (amount <= 0 || !Number.isInteger(amount)) throw new Error("Invalid tip amount")
 
@@ -64,8 +63,12 @@ export const sendTip = mutation({
 export const getBalance = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) return null
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      return null
+    }
     const user = await ctx.db.get(userId)
     return user?.pointsBalance ?? 0
   },

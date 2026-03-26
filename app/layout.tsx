@@ -1,5 +1,4 @@
 import { Geist_Mono, Inter } from "next/font/google"
-import { ConvexAuthNextjsServerProvider } from "@convex-dev/auth/nextjs/server"
 
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
@@ -15,18 +14,16 @@ const fontMono = Geist_Mono({
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <ConvexAuthNextjsServerProvider>
-      <html
-        lang="en"
-        suppressHydrationWarning
-        className={cn("dark antialiased", fontMono.variable, "font-sans", inter.variable)}
-      >
-        <body>
-          <ThemeProvider defaultTheme="dark">
-            <ConvexClientProvider>{children}</ConvexClientProvider>
-          </ThemeProvider>
-        </body>
-      </html>
-    </ConvexAuthNextjsServerProvider>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={cn("dark antialiased", fontMono.variable, "font-sans", inter.variable)}
+    >
+      <body>
+        <ThemeProvider defaultTheme="dark">
+          <ConvexClientProvider>{children}</ConvexClientProvider>
+        </ThemeProvider>
+      </body>
+    </html>
   )
 }

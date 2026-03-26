@@ -1,6 +1,6 @@
 import { v } from "convex/values"
 import { mutation, query } from "./_generated/server"
-import { getAuthUserId } from "@convex-dev/auth/server"
+import { getAuthenticatedUser } from "./auth"
 
 // ─── sendBackstageMessage ─────────────────────────────────────────────────────
 
@@ -17,7 +17,12 @@ export const sendBackstageMessage = mutation({
     if (!session || session.status !== "active") throw new Error("Session not found or ended")
 
     // Creator path
-    const userId = await getAuthUserId(ctx)
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      // Not authenticated as a creator — fall through to guest path
+    }
     if (userId) {
       if (session.creatorId !== userId) throw new Error("Not authorized")
       const user = await ctx.db.get(userId)
@@ -25,7 +30,7 @@ export const sendBackstageMessage = mutation({
         sessionId,
         senderType: "creator",
         senderId: userId,
-        senderName: user?.displayName ?? user?.name ?? "Creator",
+        senderName: user?.displayName ?? user?.username ?? "Creator",
         content,
         createdAt: Date.now(),
       })
@@ -61,7 +66,12 @@ export const listBackstageMessages = query({
     if (!session) return []
 
     // Creator path
-    const userId = await getAuthUserId(ctx)
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      // Not authenticated as a creator — fall through to guest path
+    }
     if (userId) {
       if (session.creatorId !== userId) return []
       return ctx.db

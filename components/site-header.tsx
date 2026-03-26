@@ -3,7 +3,8 @@
 import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useConvexAuth, useMutation, useQuery } from "convex/react"
+import { useConvex, useMutation, useQuery } from "convex/react"
+import { usePrivy } from "@privy-io/react-auth"
 import { api } from "@/convex/_generated/api"
 import { Search, ChevronDown, User, Video, Bell, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -32,8 +33,10 @@ function HeaderSearch() {
 
 function ProfileDropdown() {
   const router = useRouter()
+  const { logout } = usePrivy()
+  const convex = useConvex()
   const currentUser = useQuery(api.users.getCurrentUser, {})
-  const avatarSrc = currentUser?.avatarUrl ?? currentUser?.image ?? null
+  const avatarSrc = currentUser?.avatarUrl ?? null
   const initial = (currentUser?.username ?? "?")[0]?.toUpperCase()
 
   return (
@@ -63,7 +66,17 @@ function ProfileDropdown() {
           My Channel
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem className="text-red-400 focus:text-red-400">
+        <DropdownMenuItem
+          className="text-red-400 focus:text-red-400"
+          onClick={async () => {
+            try {
+              await logout()
+            } finally {
+              convex.clearAuth()
+              router.replace("/sign-in")
+            }
+          }}
+        >
           Sign Out
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -132,7 +145,8 @@ function NotificationBell() {
 }
 
 export function SiteHeader() {
-  const { isAuthenticated, isLoading } = useConvexAuth()
+  const { ready, authenticated: isAuthenticated } = usePrivy()
+  const isLoading = !ready
   const router = useRouter()
 
   return (

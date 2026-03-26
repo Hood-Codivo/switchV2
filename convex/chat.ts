@@ -1,6 +1,6 @@
 import { v } from "convex/values"
 import { mutation, query } from "./_generated/server"
-import { getAuthUserId } from "@convex-dev/auth/server"
+import { getAuthenticatedUser } from "./auth"
 
 // ─── sendMessage ──────────────────────────────────────────────────────────────
 
@@ -10,8 +10,7 @@ export const sendMessage = mutation({
     content: v.string(),
   },
   handler: async (ctx, { streamId, content }) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Sign in to chat")
+    const userId = await getAuthenticatedUser(ctx)
 
     const user = await ctx.db.get(userId)
     if (!user?.username) throw new Error("Complete your profile to chat")
@@ -97,8 +96,7 @@ export const moderateUser = mutation({
     duration: v.optional(v.number()), // seconds, for timeout only
   },
   handler: async (ctx, { streamId, userId, action, duration }) => {
-    const callerId = await getAuthUserId(ctx)
-    if (!callerId) throw new Error("Not authenticated")
+    const callerId = await getAuthenticatedUser(ctx)
 
     const stream = await ctx.db.get(streamId)
     if (!stream) throw new Error("Stream not found")
@@ -130,8 +128,7 @@ export const moderateUser = mutation({
 export const clearChat = mutation({
   args: { streamId: v.id("streams") },
   handler: async (ctx, { streamId }) => {
-    const callerId = await getAuthUserId(ctx)
-    if (!callerId) throw new Error("Not authenticated")
+    const callerId = await getAuthenticatedUser(ctx)
 
     const stream = await ctx.db.get(streamId)
     if (!stream) throw new Error("Stream not found")
@@ -152,8 +149,7 @@ export const setSlowMode = mutation({
     interval: v.number(), // seconds, 0 = off
   },
   handler: async (ctx, { streamId, interval }) => {
-    const callerId = await getAuthUserId(ctx)
-    if (!callerId) throw new Error("Not authenticated")
+    const callerId = await getAuthenticatedUser(ctx)
 
     const stream = await ctx.db.get(streamId)
     if (!stream) throw new Error("Stream not found")
@@ -168,8 +164,12 @@ export const setSlowMode = mutation({
 export const getModerationState = query({
   args: { streamId: v.id("streams") },
   handler: async (ctx, { streamId }) => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) return { banned: false, timedOutUntil: null }
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      return { banned: false, timedOutUntil: null }
+    }
 
     const moderations = await ctx.db
       .query("chatModerations")

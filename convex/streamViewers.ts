@@ -4,6 +4,8 @@ import type { MutationCtx } from "./_generated/server"
 import type { Id } from "./_generated/dataModel"
 
 const STALE_THRESHOLD_MS = 90_000
+const MAX_VIEWERS_PER_STREAM = 10_000
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // ─── recount ──────────────────────────────────────────────────────────────────
 // Counts fresh presence records and syncs streams.viewerCount + peakViewerCount.
@@ -35,6 +37,11 @@ export const join = mutation({
     sessionId: v.string(),
   },
   handler: async (ctx, { streamId, sessionId }) => {
+    if (!UUID_REGEX.test(sessionId)) return
+
+    const stream = await ctx.db.get(streamId)
+    if (!stream || stream.status !== "live") return
+
     const existing = await ctx.db
       .query("streamViewers")
       .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
@@ -43,6 +50,13 @@ export const join = mutation({
     if (existing) {
       await ctx.db.patch(existing._id, { lastSeen: Date.now() })
     } else {
+      // Cap total viewers per stream to prevent abuse
+      const currentViewers = await ctx.db
+        .query("streamViewers")
+        .withIndex("by_stream", (q) => q.eq("streamId", streamId))
+        .collect()
+      if (currentViewers.length >= MAX_VIEWERS_PER_STREAM) return
+
       await ctx.db.insert("streamViewers", { streamId, sessionId, lastSeen: Date.now() })
     }
 
@@ -55,6 +69,8 @@ export const join = mutation({
 export const heartbeat = mutation({
   args: { sessionId: v.string() },
   handler: async (ctx, { sessionId }) => {
+    if (!UUID_REGEX.test(sessionId)) return
+
     const record = await ctx.db
       .query("streamViewers")
       .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
@@ -72,6 +88,8 @@ export const heartbeat = mutation({
 export const leave = mutation({
   args: { sessionId: v.string() },
   handler: async (ctx, { sessionId }) => {
+    if (!UUID_REGEX.test(sessionId)) return
+
     const record = await ctx.db
       .query("streamViewers")
       .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
