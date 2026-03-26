@@ -16,7 +16,7 @@ async function seedUser(
 ): Promise<Id<"users">> {
   return ctx.db.insert("users", {
     privyDid: `did:privy:test-${username}`,
-    walletAddress: `So1anaWa11etAddr3ss${username}`,
+    walletAddress: `7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV${username}`,
     username,
     displayName: username,
     bio: "",

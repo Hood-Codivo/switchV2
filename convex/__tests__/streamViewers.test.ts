@@ -9,10 +9,20 @@ const modules = import.meta.glob("../**/*.ts")
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// Deterministic UUIDs for test reproducibility
+const UUID_1 = "00000000-0000-4000-8000-000000000001"
+const UUID_2 = "00000000-0000-4000-8000-000000000002"
+const UUID_3 = "00000000-0000-4000-8000-000000000003"
+const UUID_STALE = "00000000-0000-4000-8000-0000000000aa"
+const UUID_STALE_2 = "00000000-0000-4000-8000-0000000000bb"
+const UUID_FRESH = "00000000-0000-4000-8000-0000000000cc"
+const UUID_S1_STALE = "00000000-0000-4000-8000-0000000000dd"
+const UUID_S2_STALE = "00000000-0000-4000-8000-0000000000ee"
+
 async function seedUser(ctx: GenericMutationCtx<DataModel>, username: string): Promise<Id<"users">> {
   return ctx.db.insert("users", {
     privyDid: `did:privy:test-${username}`,
-    walletAddress: `So1anaWa11etAddr3ss${username}`,
+    walletAddress: `7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV${username}`,
     username,
     displayName: username,
     bio: "",
@@ -43,8 +53,8 @@ describe("streamViewers.join", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t.run(async (ctx) => seedStream(ctx, userId))
 
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "session-1" })
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "session-2" })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_1 })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_2 })
 
     const stream = await t.run(async (ctx) => ctx.db.get(streamId))
     expect(stream?.viewerCount).toBe(2)
@@ -55,8 +65,8 @@ describe("streamViewers.join", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t.run(async (ctx) => seedStream(ctx, userId))
 
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "session-1" })
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "session-1" })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_1 })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_1 })
 
     const stream = await t.run(async (ctx) => ctx.db.get(streamId))
     expect(stream?.viewerCount).toBe(1)
@@ -67,14 +77,46 @@ describe("streamViewers.join", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t.run(async (ctx) => seedStream(ctx, userId))
 
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "s1" })
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "s2" })
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "s3" })
-    await t.mutation(api.streamViewers.leave, { sessionId: "s3" })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_1 })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_2 })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_3 })
+    await t.mutation(api.streamViewers.leave, { sessionId: UUID_3 })
 
     const stream = await t.run(async (ctx) => ctx.db.get(streamId))
     expect(stream?.viewerCount).toBe(2)
     expect(stream?.peakViewerCount).toBe(3)
+  })
+
+  it("rejects non-UUID sessionIds silently", async () => {
+    const t = convexTest(schema, modules)
+    const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
+    const streamId = await t.run(async (ctx) => seedStream(ctx, userId))
+
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: "not-a-uuid" })
+
+    const stream = await t.run(async (ctx) => ctx.db.get(streamId))
+    expect(stream?.viewerCount).toBe(0)
+  })
+
+  it("rejects joins on non-live streams", async () => {
+    const t = convexTest(schema, modules)
+    const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
+    const streamId = await t.run(async (ctx) =>
+      ctx.db.insert("streams", {
+        creatorId: userId,
+        username: "alice",
+        title: "Ended Stream",
+        category: "Gaming",
+        status: "ended",
+        viewerCount: 0,
+        peakViewerCount: 0,
+      }),
+    )
+
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_1 })
+
+    const stream = await t.run(async (ctx) => ctx.db.get(streamId))
+    expect(stream?.viewerCount).toBe(0)
   })
 })
 
@@ -86,24 +128,24 @@ describe("streamViewers.heartbeat", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t.run(async (ctx) => seedStream(ctx, userId))
 
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "session-1" })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_1 })
 
     // Manually age the record to simulate time passing
     await t.run(async (ctx) => {
       const record = await ctx.db
         .query("streamViewers")
-        .withIndex("by_session", (q) => q.eq("sessionId", "session-1"))
+        .withIndex("by_session", (q) => q.eq("sessionId", UUID_1))
         .first()
       if (record) await ctx.db.patch(record._id, { lastSeen: Date.now() - 60_000 })
     })
 
     const beforeHeartbeat = Date.now()
-    await t.mutation(api.streamViewers.heartbeat, { sessionId: "session-1" })
+    await t.mutation(api.streamViewers.heartbeat, { sessionId: UUID_1 })
 
     const record = await t.run(async (ctx) =>
       ctx.db
         .query("streamViewers")
-        .withIndex("by_session", (q) => q.eq("sessionId", "session-1"))
+        .withIndex("by_session", (q) => q.eq("sessionId", UUID_1))
         .first(),
     )
     expect(record?.lastSeen).toBeGreaterThanOrEqual(beforeHeartbeat)
@@ -113,7 +155,7 @@ describe("streamViewers.heartbeat", () => {
     const t = convexTest(schema, modules)
 
     await expect(
-      t.mutation(api.streamViewers.heartbeat, { sessionId: "ghost-session" }),
+      t.mutation(api.streamViewers.heartbeat, { sessionId: UUID_1 }),
     ).resolves.not.toThrow()
   })
 })
@@ -126,9 +168,9 @@ describe("streamViewers.leave", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t.run(async (ctx) => seedStream(ctx, userId))
 
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "s1" })
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "s2" })
-    await t.mutation(api.streamViewers.leave, { sessionId: "s1" })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_1 })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_2 })
+    await t.mutation(api.streamViewers.leave, { sessionId: UUID_1 })
 
     const stream = await t.run(async (ctx) => ctx.db.get(streamId))
     expect(stream?.viewerCount).toBe(1)
@@ -138,7 +180,7 @@ describe("streamViewers.leave", () => {
     const t = convexTest(schema, modules)
 
     await expect(
-      t.mutation(api.streamViewers.leave, { sessionId: "ghost-session" }),
+      t.mutation(api.streamViewers.leave, { sessionId: UUID_1 }),
     ).resolves.not.toThrow()
   })
 })
@@ -151,15 +193,15 @@ describe("stale presence — viewer count accuracy", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t.run(async (ctx) => seedStream(ctx, userId))
 
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "stale" })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_STALE })
     await t.run(async (ctx) => {
       const record = await ctx.db
         .query("streamViewers")
-        .withIndex("by_session", (q) => q.eq("sessionId", "stale"))
+        .withIndex("by_session", (q) => q.eq("sessionId", UUID_STALE))
         .first()
       if (record) await ctx.db.patch(record._id, { lastSeen: Date.now() - 120_000 })
     })
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "fresh" })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_FRESH })
 
     const stream = await t.run(async (ctx) => ctx.db.get(streamId))
     // Stale session is excluded from count; only "fresh" is counted
@@ -169,7 +211,7 @@ describe("stale presence — viewer count accuracy", () => {
     const staleRecord = await t.run(async (ctx) =>
       ctx.db
         .query("streamViewers")
-        .withIndex("by_session", (q) => q.eq("sessionId", "stale"))
+        .withIndex("by_session", (q) => q.eq("sessionId", UUID_STALE))
         .first(),
     )
     expect(staleRecord).not.toBeNull()
@@ -184,13 +226,13 @@ describe("pruneStaleViewers", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const streamId = await t.run(async (ctx) => seedStream(ctx, userId))
 
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "stale-1" })
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "stale-2" })
-    await t.mutation(api.streamViewers.join, { streamId, sessionId: "fresh" })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_STALE })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_STALE_2 })
+    await t.mutation(api.streamViewers.join, { streamId, sessionId: UUID_FRESH })
 
     // Age the two stale records
     await t.run(async (ctx) => {
-      for (const sessionId of ["stale-1", "stale-2"]) {
+      for (const sessionId of [UUID_STALE, UUID_STALE_2]) {
         const record = await ctx.db
           .query("streamViewers")
           .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
@@ -206,7 +248,7 @@ describe("pruneStaleViewers", () => {
       ctx.db.query("streamViewers").withIndex("by_stream", (q) => q.eq("streamId", streamId)).collect(),
     )
     expect(remaining).toHaveLength(1)
-    expect(remaining[0].sessionId).toBe("fresh")
+    expect(remaining[0].sessionId).toBe(UUID_FRESH)
 
     // Stream viewer count reflects actual live viewers
     const stream = await t.run(async (ctx) => ctx.db.get(streamId))
@@ -229,8 +271,8 @@ describe("pruneStaleViewers", () => {
       }),
     )
 
-    await t.mutation(api.streamViewers.join, { streamId: stream1Id, sessionId: "s1-stale" })
-    await t.mutation(api.streamViewers.join, { streamId: stream2Id, sessionId: "s2-stale" })
+    await t.mutation(api.streamViewers.join, { streamId: stream1Id, sessionId: UUID_S1_STALE })
+    await t.mutation(api.streamViewers.join, { streamId: stream2Id, sessionId: UUID_S2_STALE })
 
     await t.run(async (ctx) => {
       const all = await ctx.db.query("streamViewers").collect()

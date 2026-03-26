@@ -7,7 +7,7 @@ const modules = import.meta.glob("../**/*.ts")
 
 const testUser = {
   privyDid: "did:privy:test123",
-  walletAddress: "So1anaWa11etAddr3ss",
+  walletAddress: "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV",
   username: "alice",
   displayName: "Alice",
   bio: "",

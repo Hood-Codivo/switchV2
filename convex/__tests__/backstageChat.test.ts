@@ -12,7 +12,7 @@ const modules = import.meta.glob("../**/*.ts")
 async function seedUser(ctx: GenericMutationCtx<DataModel>, username: string) {
   return ctx.db.insert("users", {
     privyDid: `did:privy:test-${username}`,
-    walletAddress: `So1anaWa11etAddr3ss${username}`,
+    walletAddress: `7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV${username}`,
     username,
     displayName: username,
     bio: "",

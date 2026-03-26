@@ -5,7 +5,7 @@ import { createRemoteJWKSet } from "jose"
 const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID
 const PRIVY_JWKS = PRIVY_APP_ID
   ? createRemoteJWKSet(
-      new URL(`https://auth.privy.io/api/v1/apps/${PRIVY_APP_ID}/.well-known/jwks.json`),
+      new URL(`https://auth.privy.io/api/v1/apps/${PRIVY_APP_ID}/jwks.json`),
     )
   : null
 

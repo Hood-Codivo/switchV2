@@ -12,7 +12,7 @@ const modules = import.meta.glob("../**/*.ts")
 async function seedUser(ctx: GenericMutationCtx<DataModel>, username: string): Promise<Id<"users">> {
   return ctx.db.insert("users", {
     privyDid: `did:privy:test-${username}`,
-    walletAddress: `So1anaWa11etAddr3ss${username}`,
+    walletAddress: `7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV${username}`,
     username,
     displayName: username,
     bio: "",
@@ -64,7 +64,7 @@ describe("streams.create", () => {
     const t = convexTest(schema, modules)
     // Insert a user without a username (pre-onboarding state)
     await t.run(async (ctx) =>
-      ctx.db.insert("users", { privyDid: "did:privy:test-newuser", walletAddress: "So1anaWa11etAddr3ssNewUser" }),
+      ctx.db.insert("users", { privyDid: "did:privy:test-newuser", walletAddress: "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtVNewUser" }),
     )
 
     await expect(

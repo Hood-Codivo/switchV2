@@ -5,16 +5,20 @@ import schema from "../schema"
 
 const modules = import.meta.glob("../**/*.ts")
 
+// Valid Solana base58 test addresses (44 chars each)
+const WALLET_ALICE = "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtVa"
+const WALLET_BOB = "8FdEiTZGyYztdtaZFq46LJN9wwx4twBvMKUaYwDGMuWb"
+
 // Pre-onboarding user: has privyDid and walletAddress but no username
 const preOnboardingUser = {
   privyDid: "did:privy:test-alice",
-  walletAddress: "So1anaWa11etAddr3ssAlice",
+  walletAddress: WALLET_ALICE,
 }
 
 // Fully onboarded user record
 const onboardedUser = {
   privyDid: "did:privy:test-alice",
-  walletAddress: "So1anaWa11etAddr3ssAlice",
+  walletAddress: WALLET_ALICE,
   username: "alice",
   displayName: "Alice",
   bio: "",
@@ -89,7 +93,7 @@ describe("users.completeOnboarding", () => {
       .mutation(api.users.completeOnboarding, {
         username: "alice",
         displayName: "Alice",
-        walletAddress: "So1anaWa11etAddr3ssAlice",
+        walletAddress: WALLET_ALICE,
       })
     const user = await t
       .withIdentity({ subject: "did:privy:test-alice" })
@@ -108,7 +112,7 @@ describe("users.completeOnboarding", () => {
       t.mutation(api.users.completeOnboarding, {
         username: "alice",
         displayName: "Alice",
-        walletAddress: "So1anaWa11etAddr3ssAlice",
+        walletAddress: WALLET_ALICE,
       }),
     ).rejects.toThrow("Not authenticated")
   })
@@ -124,7 +128,7 @@ describe("users.completeOnboarding", () => {
         .mutation(api.users.completeOnboarding, {
           username: "alice",
           displayName: "Bob",
-          walletAddress: "So1anaWa11etAddr3ssBob",
+          walletAddress: WALLET_BOB,
         }),
     ).rejects.toThrow("Username is already taken")
   })
@@ -137,7 +141,7 @@ describe("users.completeOnboarding", () => {
         .mutation(api.users.completeOnboarding, {
           username: "bad username!",
           displayName: "Alice",
-          walletAddress: "So1anaWa11etAddr3ssAlice",
+          walletAddress: WALLET_ALICE,
         }),
     ).rejects.toThrow()
   })

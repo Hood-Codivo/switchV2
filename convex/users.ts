@@ -3,6 +3,10 @@ import { mutation, query } from "./_generated/server"
 import { getAuthenticatedUser } from "./auth"
 import { validateUsername } from "./lib/username"
 
+// Solana addresses are base58-encoded ed25519 public keys (32–44 chars).
+// This regex rejects non-base58 characters (0, O, I, l are excluded by base58).
+const SOLANA_ADDRESS_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
+
 export const getCurrentUser = query({
   args: {},
   handler: async (ctx) => {
@@ -46,6 +50,16 @@ export const completeOnboarding = mutation({
 
     const validation = validateUsername(username)
     if (!validation.valid) throw new Error(validation.error)
+
+    if (!SOLANA_ADDRESS_REGEX.test(walletAddress)) {
+      throw new Error("Invalid Solana wallet address")
+    }
+
+    const existingDid = await ctx.db
+      .query("users")
+      .withIndex("by_privyDid", (q) => q.eq("privyDid", privyDid))
+      .unique()
+    if (existingDid !== null) throw new Error("Account already exists for this identity")
 
     const existing = await ctx.db
       .query("users")

@@ -15,7 +15,7 @@ async function seedUser(
 ) {
   return ctx.db.insert("users", {
     privyDid: `did:privy:test-${overrides.username}`,
-    walletAddress: `So1anaWa11etAddr3ss${overrides.username}`,
+    walletAddress: `7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV${overrides.username}`,
     username: overrides.username,
     displayName: overrides.displayName ?? overrides.username,
     bio: "",

@@ -69,9 +69,12 @@ function ProfileDropdown() {
         <DropdownMenuItem
           className="text-red-400 focus:text-red-400"
           onClick={async () => {
-            await logout()
-            convex.clearAuth()
-            router.push("/sign-in")
+            try {
+              await logout()
+            } finally {
+              convex.clearAuth()
+              router.replace("/sign-in")
+            }
           }}
         >
           Sign Out
