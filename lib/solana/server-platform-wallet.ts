@@ -8,6 +8,7 @@ import {
   createSolanaRpc,
   createTransactionMessage,
   getBase58Encoder,
+  getBytesEncoder,
   getSignatureFromTransaction,
   getTransactionDecoder,
   getTransactionEncoder,
@@ -16,12 +17,17 @@ import {
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
 } from "@solana/kit"
-import { checkPlatformWalletProfileExists, getPlatformWalletConfig } from "./platform-wallet"
+import {
+  checkPlatformWalletProfileExists,
+  getPlatformWalletConfig,
+} from "./platform-wallet"
 
 const CREATE_STREAMER_DISCRIMINATOR = new Uint8Array([192, 22, 239, 153, 57, 26, 45, 12])
+const WITHDRAW_DISCRIMINATOR = new Uint8Array([183, 18, 70, 156, 148, 109, 161, 34])
 const SYSTEM_PROGRAM_ADDRESS = address("11111111111111111111111111111111")
 const TOKEN_PROGRAM_ADDRESS = address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
 const ASSOCIATED_TOKEN_PROGRAM_ADDRESS = address("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+const USDC_DECIMALS = 6
 
 function ensureRuntimePrimitives(logScope: string) {
   if (typeof globalThis.queueMicrotask !== "function") {
@@ -52,6 +58,22 @@ async function getBroadcasterSigner() {
 
   const privateKey = getBase58Encoder().encode(privateKeyBase58)
   return createKeyPairSignerFromBytes(privateKey)
+}
+
+function encodeU64LE(value: bigint) {
+  const bytes = new Uint8Array(8)
+  new DataView(bytes.buffer).setBigUint64(0, value, true)
+  return bytes
+}
+
+function encodeWithdrawParams(amountBaseUnits: bigint, gasInUsdcBaseUnits: bigint) {
+  return getBytesEncoder().encode(
+    new Uint8Array([
+      ...WITHDRAW_DISCRIMINATOR,
+      ...encodeU64LE(gasInUsdcBaseUnits),
+      ...encodeU64LE(amountBaseUnits),
+    ]),
+  )
 }
 
 export async function preparePlatformWalletCreationTransaction(
@@ -166,4 +188,122 @@ export async function submitPlatformWalletCreationTransaction(
   }
 
   throw new Error("Platform wallet transaction submitted but account was not observed on-chain")
+}
+
+export async function prepareTipTransaction(
+  senderWalletAddress: string,
+  recipientWalletAddress: string,
+  amount: number,
+  logScope = "tips:send",
+) {
+  ensureRuntimePrimitives(logScope)
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Invalid tip amount")
+  }
+
+  const config = getPlatformWalletConfig()
+  const rpc = createSolanaRpc(config.rpcUrl as Parameters<typeof createSolanaRpc>[0])
+  const broadcasterSigner = await getBroadcasterSigner()
+  const { details: senderWallet, exists: senderExists } =
+    await checkPlatformWalletProfileExists(senderWalletAddress)
+  const { details: recipientWallet, exists: recipientExists } =
+    await checkPlatformWalletProfileExists(recipientWalletAddress)
+
+  if (!senderExists) {
+    throw new Error("Sender wallet is not initialized")
+  }
+
+  if (!recipientExists) {
+    throw new Error("Recipient wallet is not initialized")
+  }
+
+  const amountBaseUnits = BigInt(Math.round(amount * 10 ** USDC_DECIMALS))
+  const gasInUsdcBaseUnits = BigInt(0)
+  const { value: latestBlockhash } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send()
+
+  console.log(`[${logScope}] preparing tip tx`, {
+    senderWalletAddress,
+    broadcasterWalletAddress: broadcasterSigner.address,
+    senderStreamerStatePda: senderWallet.platformWalletPda,
+    senderStreamerAta: senderWallet.platformWalletUsdcAta,
+    recipientWalletAddress,
+    streamerStatePda: recipientWallet.platformWalletPda,
+    streamerAta: recipientWallet.platformWalletUsdcAta,
+    amount,
+    amountBaseUnits: amountBaseUnits.toString(),
+    gasInUsdcBaseUnits: gasInUsdcBaseUnits.toString(),
+  })
+
+  const instruction = {
+    programAddress: address(config.programId),
+    accounts: [
+      { address: address(senderWalletAddress), role: AccountRole.WRITABLE_SIGNER },
+      { address: address(recipientWallet.platformWalletUsdcAta), role: AccountRole.WRITABLE },
+      { address: address(senderWallet.platformWalletUsdcAta), role: AccountRole.WRITABLE },
+      { address: address(config.usdcMint), role: AccountRole.READONLY },
+      { address: address(senderWallet.globalStatePda), role: AccountRole.READONLY },
+      { address: address(senderWallet.treasuryUsdcAta), role: AccountRole.WRITABLE },
+      { address: address(senderWallet.platformWalletPda), role: AccountRole.READONLY },
+      { address: TOKEN_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+      { address: ASSOCIATED_TOKEN_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+      { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+    ],
+    data: encodeWithdrawParams(amountBaseUnits, gasInUsdcBaseUnits),
+  }
+
+  const transactionMessage = appendTransactionMessageInstruction(
+    instruction,
+    setTransactionMessageLifetimeUsingBlockhash(
+      latestBlockhash,
+      setTransactionMessageFeePayerSigner(
+        broadcasterSigner,
+        createTransactionMessage({ version: 0 }),
+      ),
+    ),
+  )
+
+  const unsignedTransaction = await partiallySignTransactionMessageWithSigners(transactionMessage)
+  const wireTransactionBytes = getTransactionEncoder().encode(unsignedTransaction)
+  const transactionBase64 = Buffer.from(wireTransactionBytes).toString("base64")
+
+  return {
+    senderWalletAddress,
+    senderStreamerStatePda: senderWallet.platformWalletPda,
+    senderStreamerAta: senderWallet.platformWalletUsdcAta,
+    recipientWalletAddress,
+    recipientStreamerStatePda: recipientWallet.platformWalletPda,
+    recipientStreamerAta: recipientWallet.platformWalletUsdcAta,
+    tokenMint: config.usdcMint,
+    amount,
+    transactionBase64,
+  }
+}
+
+export async function submitTipTransaction(
+  senderWalletAddress: string,
+  signedTransactionBase64: string,
+  logScope = "tips:send",
+) {
+  const config = getPlatformWalletConfig()
+  const rpc = createSolanaRpc(config.rpcUrl as Parameters<typeof createSolanaRpc>[0])
+  const signedTransactionBytes = Buffer.from(signedTransactionBase64, "base64")
+  const signedTransaction = getTransactionDecoder().decode(signedTransactionBytes)
+  assertIsFullySignedTransaction(signedTransaction)
+  assertIsTransactionWithinSizeLimit(signedTransaction)
+  const sendTransactionWithoutConfirming = sendTransactionWithoutConfirmingFactory({ rpc })
+
+  await sendTransactionWithoutConfirming(signedTransaction, { commitment: "confirmed" })
+  const signature = getSignatureFromTransaction(signedTransaction)
+
+  console.log(`[${logScope}] withdraw tip sent`, {
+    senderWalletAddress,
+    signature,
+  })
+
+  return {
+    senderWalletAddress,
+    tokenMint: config.usdcMint,
+    signature,
+  }
 }

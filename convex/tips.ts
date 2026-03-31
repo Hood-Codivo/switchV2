@@ -1,5 +1,5 @@
 import { v } from "convex/values"
-import { mutation, query } from "./_generated/server"
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server"
 import { getAuthenticatedUser } from "./auth"
 
 // ─── sendTip ──────────────────────────────────────────────────────────────────
@@ -13,7 +13,7 @@ export const sendTip = mutation({
   handler: async (ctx, { streamId, amount, message }) => {
     const userId = await getAuthenticatedUser(ctx)
 
-    if (amount <= 0 || !Number.isInteger(amount)) throw new Error("Invalid tip amount")
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error("Invalid tip amount")
 
     const user = await ctx.db.get(userId)
     if (!user?.username) throw new Error("Complete your profile to send tips")
@@ -71,6 +71,64 @@ export const getBalance = query({
     }
     const user = await ctx.db.get(userId)
     return user?.pointsBalance ?? 0
+  },
+})
+
+export const getTipTarget = internalQuery({
+  args: { streamId: v.id("streams") },
+  handler: async (ctx, { streamId }) => {
+    const stream = await ctx.db.get(streamId)
+    if (!stream) throw new Error("Stream not found")
+    if (stream.status !== "live") throw new Error("Tips are only available on live streams")
+
+    const creator = await ctx.db.get(stream.creatorId)
+    if (!creator?.walletAddress) throw new Error("Creator wallet is unavailable")
+
+    return {
+      creatorId: stream.creatorId,
+      creatorWalletAddress: creator.walletAddress,
+      streamId: stream._id,
+    }
+  },
+})
+
+export const recordBroadcastTip = internalMutation({
+  args: {
+    fromUserId: v.id("users"),
+    toUserId: v.id("users"),
+    streamId: v.id("streams"),
+    fromUsername: v.string(),
+    amount: v.number(),
+    message: v.optional(v.string()),
+    solanaSignature: v.string(),
+    tokenMint: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stream = await ctx.db.get(args.streamId)
+    if (!stream) throw new Error("Stream not found")
+
+    await ctx.db.patch(args.streamId, {
+      tipTotal: (stream.tipTotal ?? 0) + args.amount,
+    })
+
+    await ctx.db.insert("tipTransactions", {
+      fromUserId: args.fromUserId,
+      toUserId: args.toUserId,
+      streamId: args.streamId,
+      amount: args.amount,
+      message: args.message?.trim() || undefined,
+      solanaSignature: args.solanaSignature,
+      tokenMint: args.tokenMint,
+      createdAt: Date.now(),
+    })
+
+    await ctx.db.insert("tipAlerts", {
+      streamId: args.streamId,
+      fromUsername: args.fromUsername,
+      amount: args.amount,
+      message: args.message?.trim() || undefined,
+      createdAt: Date.now(),
+    })
   },
 })
 

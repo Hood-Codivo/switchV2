@@ -1,13 +1,31 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { useQuery, useMutation } from "convex/react"
+import { useAction, useMutation, useQuery } from "convex/react"
 import { usePrivy } from "@privy-io/react-auth"
+import { useSignTransaction, useWallets } from "@privy-io/react-auth/solana"
 import { useRouter } from "next/navigation"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { MessageCircle, UsersRound, Smile, Send, Ban, Clock, Trash2, X, Coins } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { usePlatformWallet } from "@/hooks/use-platform-wallet"
+import { truncateAddress } from "@/lib/solana/platform-wallet"
+
+const solanaRpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com"
+const solanaChain = solanaRpcUrl.includes("devnet")
+  ? "solana:devnet"
+  : solanaRpcUrl.includes("testnet")
+    ? "solana:testnet"
+    : "solana:mainnet"
+
+function decodeBase64ToBytes(value: string) {
+  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0))
+}
+
+function encodeBytesToBase64(value: Uint8Array) {
+  return btoa(String.fromCharCode(...value))
+}
 
 type StreamChatPanelProps = {
   streamId: Id<"streams">
@@ -77,24 +95,74 @@ const TIP_PRESETS = [5, 10, 20, 50, 100, 1000]
 function SendTipPanel({ streamId, onClose }: { streamId: Id<"streams">; onClose: () => void }) {
   const { authenticated: isAuthenticated } = usePrivy()
   const router = useRouter()
-  const balance = useQuery(api.tips.getBalance, {})
-  const sendTip = useMutation(api.tips.sendTip)
+  const currentUser = useQuery(api.users.getCurrentUser, {})
+  const { wallets: solanaWallets } = useWallets()
+  const { signTransaction } = useSignTransaction()
+  const prepareEnsurePlatformWallet = useAction(api.serverPlatformWallet.prepareEnsurePlatformWallet)
+  const submitEnsurePlatformWallet = useAction(api.serverPlatformWallet.submitEnsurePlatformWallet)
+  const prepareSendTip = useAction(api.serverTips.prepareSendTip)
+  const submitSendTip = useAction(api.serverTips.submitSendTip)
+  const {
+    details: senderPlatformWallet,
+    usdcBalance,
+    loading: balanceLoading,
+  } = usePlatformWallet(currentUser?.walletAddress)
   const [selectedAmount, setSelectedAmount] = useState(5)
   const [customAmount, setCustomAmount] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
 
-  const amount = customAmount ? parseInt(customAmount, 10) || 0 : selectedAmount
+  const amount = customAmount ? parseFloat(customAmount) || 0 : selectedAmount
+  const numericBalance = usdcBalance ? Number(usdcBalance) : null
 
   async function handleSend() {
     if (amount <= 0) return
     setSending(true)
     setError(null)
     try {
-      await sendTip({ streamId, amount })
+      const walletAddress = currentUser?.walletAddress
+      const embeddedWallet = walletAddress
+        ? solanaWallets.find((wallet) => wallet.address === walletAddress)
+        : null
+
+      if (!walletAddress || !embeddedWallet) {
+        throw new Error("Wallet not ready yet. Please try again.")
+      }
+
+      if (numericBalance !== null && amount > numericBalance) {
+        throw new Error("Insufficient USDC balance")
+      }
+
+      const walletSetup = await prepareEnsurePlatformWallet({})
+      if (!walletSetup.exists && walletSetup.transactionBase64) {
+        const walletSetupSignature = await signTransaction({
+          wallet: embeddedWallet,
+          chain: solanaChain,
+          transaction: decodeBase64ToBytes(walletSetup.transactionBase64),
+        })
+
+        await submitEnsurePlatformWallet({
+          signedTransactionBase64: encodeBytesToBase64(walletSetupSignature.signedTransaction),
+        })
+      }
+
+      const tipTransaction = await prepareSendTip({ streamId, amount })
+      const signedTipTransaction = await signTransaction({
+        wallet: embeddedWallet,
+        chain: solanaChain,
+        transaction: decodeBase64ToBytes(tipTransaction.transactionBase64),
+      })
+
+      await submitSendTip({
+        streamId,
+        amount,
+        signedTransactionBase64: encodeBytesToBase64(signedTipTransaction.signedTransaction),
+      })
+
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to send tip")
+      console.error("[send-tip] failed", err)
+      setError("Failed to tip user")
     } finally {
       setSending(false)
     }
@@ -130,8 +198,18 @@ function SendTipPanel({ streamId, onClose }: { streamId: Id<"streams">; onClose:
         <Coins className="size-4 text-emerald-400" />
         <span className="text-sm text-zinc-400">Balance:</span>
         <span className="text-sm font-semibold text-emerald-400">
-          ${balance?.toLocaleString() ?? "0"}
+          {balanceLoading ? "Loading..." : `${usdcBalance ?? "0"} USDC`}
         </span>
+      </div>
+      <div className="px-4 pb-3 text-[11px] text-zinc-500">
+        <p>
+          Platform wallet:{" "}
+          <span className="text-zinc-400">
+            {senderPlatformWallet
+              ? truncateAddress(senderPlatformWallet.platformWalletPda, 6, 6)
+              : "Unavailable"}
+          </span>
+        </p>
       </div>
 
       {/* Spacer */}
@@ -177,12 +255,12 @@ function SendTipPanel({ streamId, onClose }: { streamId: Id<"streams">; onClose:
           <Coins className="size-4 text-emerald-400" />
           <span className="text-sm text-zinc-400">Balance:</span>
           <span className="text-sm font-semibold text-emerald-400">
-            ${balance?.toLocaleString() ?? "0"}
+            {balanceLoading ? "Loading..." : `${usdcBalance ?? "0"} USDC`}
           </span>
         </div>
         <button
           onClick={handleSend}
-          disabled={sending || amount <= 0 || (balance !== null && balance !== undefined && amount > balance)}
+          disabled={sending || amount <= 0 || (numericBalance !== null && amount > numericBalance)}
           className="rounded-full bg-red-500 px-5 py-2 text-xs font-semibold text-white transition-colors hover:bg-red-600 disabled:opacity-40"
         >
           {sending ? "Sending…" : "Send Tip"}

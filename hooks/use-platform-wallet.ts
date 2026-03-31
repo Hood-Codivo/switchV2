@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   derivePlatformWallet,
-  fetchUsdcAtaBalance,
+  fetchWalletUsdcBalance,
   type PlatformWalletDetails,
 } from "@/lib/solana/platform-wallet";
 
@@ -42,9 +42,7 @@ export function usePlatformWallet(
     void (async () => {
       try {
         const details = await derivePlatformWallet(userWalletAddress);
-        const balance = await fetchUsdcAtaBalance(
-          details.platformWalletUsdcAta,
-        );
+        const balance = await fetchWalletUsdcBalance(details.platformWalletPda);
 
         if (cancelled) return;
 

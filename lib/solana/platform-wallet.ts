@@ -37,15 +37,6 @@ export type PlatformWalletProfileStatus = {
   exists: boolean
 }
 
-function requireEnv(name: string) {
-  const value = process.env[name]
-  if (!value) {
-    console.error(`[platform-wallet] Missing required env var: ${name}`)
-    throw new Error(`Missing ${name}`)
-  }
-  return value
-}
-
 export function getPlatformWalletConfig(): PlatformWalletConfig {
   const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? DEFAULT_RPC_URL
   const defaultUsdcMint = rpcUrl.includes("devnet")
@@ -58,6 +49,24 @@ export function getPlatformWalletConfig(): PlatformWalletConfig {
     rpcUrl,
     seed: process.env.NEXT_PUBLIC_PLATFORM_WALLET_SEED ?? DEFAULT_STREAMER_SEED,
   }
+}
+
+export async function deriveAssociatedTokenAddress(
+  ownerAddress: string,
+  mintAddress: string,
+) {
+  const encoder = getAddressEncoder()
+
+  const [associatedTokenAddress] = await getProgramDerivedAddress({
+    programAddress: ASSOCIATED_TOKEN_PROGRAM_ADDRESS,
+    seeds: [
+      encoder.encode(address(ownerAddress)),
+      encoder.encode(TOKEN_PROGRAM_ADDRESS),
+      encoder.encode(address(mintAddress)),
+    ],
+  })
+
+  return associatedTokenAddress
 }
 
 export async function derivePlatformWallet(userWalletAddress: string): Promise<PlatformWalletDetails> {
@@ -76,23 +85,8 @@ export async function derivePlatformWallet(userWalletAddress: string): Promise<P
     seeds: [new TextEncoder().encode(config.seed), encoder.encode(walletAddress)],
   })
 
-  const [platformWalletUsdcAta] = await getProgramDerivedAddress({
-    programAddress: ASSOCIATED_TOKEN_PROGRAM_ADDRESS,
-    seeds: [
-      encoder.encode(platformWalletPda),
-      encoder.encode(TOKEN_PROGRAM_ADDRESS),
-      encoder.encode(address(config.usdcMint)),
-    ],
-  })
-
-  const [treasuryUsdcAta] = await getProgramDerivedAddress({
-    programAddress: ASSOCIATED_TOKEN_PROGRAM_ADDRESS,
-    seeds: [
-      encoder.encode(globalStatePda),
-      encoder.encode(TOKEN_PROGRAM_ADDRESS),
-      encoder.encode(address(config.usdcMint)),
-    ],
-  })
+  const platformWalletUsdcAta = await deriveAssociatedTokenAddress(platformWalletPda, config.usdcMint)
+  const treasuryUsdcAta = await deriveAssociatedTokenAddress(globalStatePda, config.usdcMint)
 
   return {
     userWalletAddress,
@@ -125,6 +119,100 @@ export async function fetchUsdcAtaBalance(ataAddress: string) {
       uiAmountString: "0",
     }
   }
+}
+
+export async function fetchWalletMintBalance(
+  walletAddress: string,
+  mintAddress?: string,
+) {
+  const { rpcUrl } = getPlatformWalletConfig()
+  const rpc = createSolanaRpc(rpcUrl as Parameters<typeof createSolanaRpc>[0])
+  const resolvedMintAddress = mintAddress ?? getPlatformWalletConfig().usdcMint
+  const derivedAtaAddress = await deriveAssociatedTokenAddress(walletAddress, resolvedMintAddress)
+
+  try {
+    const response = await rpc
+      .getTokenAccountsByOwner(
+        address(walletAddress),
+        { mint: address(resolvedMintAddress) },
+        { commitment: "confirmed", encoding: "jsonParsed" },
+      )
+      .send()
+
+    const tokenAccounts = (response.value ?? [])
+      .map((entry) => {
+        const parsed = (entry.account.data as {
+          parsed?: {
+            info?: {
+              state?: string
+              tokenAmount?: {
+                amount?: string
+                decimals?: number
+                uiAmountString?: string
+              }
+            }
+          }
+        }).parsed
+
+        return {
+          pubkey: entry.pubkey,
+          state: parsed?.info?.state,
+          amount: parsed?.info?.tokenAmount?.amount ?? "0",
+          decimals: parsed?.info?.tokenAmount?.decimals ?? 6,
+          uiAmountString: parsed?.info?.tokenAmount?.uiAmountString ?? "0",
+        }
+      })
+      .filter((entry) => entry.state === "initialized")
+
+    const preferredAccount =
+      tokenAccounts.find((entry) => entry.pubkey === derivedAtaAddress) ??
+      tokenAccounts.sort((a, b) => Number(b.amount) - Number(a.amount))[0]
+
+    console.log("[platform-wallet] balance lookup", {
+      walletAddress,
+      mintAddress: resolvedMintAddress,
+      derivedAtaAddress,
+      tokenAccounts,
+      selectedAccount: preferredAccount ?? null,
+      rpcUrl,
+    })
+
+    if (preferredAccount) {
+      return {
+        ataAddress: preferredAccount.pubkey,
+        mintAddress: resolvedMintAddress,
+        amount: preferredAccount.amount,
+        decimals: preferredAccount.decimals,
+        uiAmountString: preferredAccount.uiAmountString,
+      }
+    }
+  } catch (error) {
+    console.log("[platform-wallet] owner token account lookup failed", {
+      walletAddress,
+      mintAddress: resolvedMintAddress,
+      error,
+    })
+  }
+
+  const balance = await fetchUsdcAtaBalance(derivedAtaAddress)
+
+  console.log("[platform-wallet] balance lookup fallback", {
+    walletAddress,
+    mintAddress: resolvedMintAddress,
+    derivedAtaAddress,
+    fallbackBalance: balance,
+    rpcUrl,
+  })
+
+  return {
+    ataAddress: derivedAtaAddress,
+    mintAddress: resolvedMintAddress,
+    ...balance,
+  }
+}
+
+export async function fetchWalletUsdcBalance(walletAddress: string) {
+  return fetchWalletMintBalance(walletAddress, getPlatformWalletConfig().usdcMint)
 }
 
 export async function checkPlatformWalletProfileExists(
