@@ -2,10 +2,18 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useAction, useQuery } from "convex/react"
+import { useSignTransaction, useWallets } from "@privy-io/react-auth/solana"
 import { api } from "@/convex/_generated/api"
 import type RTKClient from "@cloudflare/realtimekit"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { StreamCategory } from "@/convex/schema"
+
+const solanaRpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com"
+const solanaChain = solanaRpcUrl.includes("devnet")
+  ? "solana:devnet"
+  : solanaRpcUrl.includes("testnet")
+    ? "solana:testnet"
+    : "solana:mainnet"
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -18,6 +26,14 @@ export type UseGoLiveReturn = {
   health: StreamHealth | null
   goLive: (title: string, category: StreamCategory) => Promise<void>
   endStream: () => Promise<void>
+}
+
+function decodeBase64ToBytes(value: string) {
+  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0))
+}
+
+function encodeBytesToBase64(value: Uint8Array) {
+  return btoa(String.fromCharCode(...value))
 }
 
 // ─── Health derivation ────────────────────────────────────────────────────────
@@ -64,8 +80,12 @@ export function useGoLive(
   const healthIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Convex actions — go-live and end-stream handled entirely on the backend
+  const preparePlatformWalletAction = useAction(api.serverPlatformWallet.prepareEnsurePlatformWallet)
+  const submitPlatformWalletAction = useAction(api.serverPlatformWallet.submitEnsurePlatformWallet)
   const goLiveAction = useAction(api.streams.goLive)
   const endLivestreamAction = useAction(api.streams.endLivestream)
+  const { wallets: solanaWallets } = useWallets()
+  const { signTransaction } = useSignTransaction()
 
   // Reactive viewer count from Convex
   const currentUser = useQuery(api.users.getCurrentUser, {})
@@ -103,6 +123,28 @@ export function useGoLive(
     async (title: string, category: StreamCategory) => {
       setLiveState("starting")
       try {
+        const walletAddress = currentUser?.walletAddress
+        const embeddedWallet = walletAddress
+          ? solanaWallets.find((wallet) => wallet.address === walletAddress)
+          : null
+
+        if (!walletAddress || !embeddedWallet) {
+          throw new Error("Wallet not ready yet. Please try again.")
+        }
+
+        const prepareResult = await preparePlatformWalletAction({})
+        if (!prepareResult.exists && prepareResult.transactionBase64) {
+          const signedTransaction = await signTransaction({
+            wallet: embeddedWallet,
+            chain: solanaChain,
+            transaction: decodeBase64ToBytes(prepareResult.transactionBase64),
+          })
+
+          await submitPlatformWalletAction({
+            signedTransactionBase64: encodeBytesToBase64(signedTransaction.signedTransaction),
+          })
+        }
+
         const { streamId } = await goLiveAction({ title, category })
         streamIdRef.current = streamId as Id<"streams">
         setLiveState("live")
@@ -113,7 +155,15 @@ export function useGoLive(
         throw err
       }
     },
-    [goLiveAction, startHealthMonitoring],
+    [
+      currentUser?.walletAddress,
+      goLiveAction,
+      preparePlatformWalletAction,
+      signTransaction,
+      solanaWallets,
+      startHealthMonitoring,
+      submitPlatformWalletAction,
+    ],
   )
 
   // ─── endStream ───────────────────────────────────────────────────────────

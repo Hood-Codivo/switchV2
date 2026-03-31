@@ -6,8 +6,10 @@ import { useRouter } from "next/navigation"
 import { useConvex, useMutation, useQuery } from "convex/react"
 import { usePrivy } from "@privy-io/react-auth"
 import { api } from "@/convex/_generated/api"
-import { Search, ChevronDown, User, Video, Bell, Check } from "lucide-react"
+import { Search, ChevronDown, User, Video, Bell, Check, Copy } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { usePlatformWallet } from "@/hooks/use-platform-wallet"
+import { truncateAddress } from "@/lib/solana/platform-wallet"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,6 +38,7 @@ function ProfileDropdown() {
   const { logout } = usePrivy()
   const convex = useConvex()
   const currentUser = useQuery(api.users.getCurrentUser, {})
+  const { details, usdcBalance, loading, error } = usePlatformWallet(currentUser?.walletAddress)
   const avatarSrc = currentUser?.avatarUrl ?? null
   const initial = (currentUser?.username ?? "?")[0]?.toUpperCase()
 
@@ -56,7 +59,42 @@ function ProfileDropdown() {
         </span>
         <ChevronDown className="size-3.5 text-zinc-400" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48">
+      <DropdownMenuContent align="end" className="w-72">
+        <div className="px-3 py-3">
+          <p className="text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">
+            Platform Wallet
+          </p>
+          <div className="mt-3 rounded-xl border border-zinc-800 bg-zinc-950/80 p-3">
+            <p className="text-[11px] text-zinc-500">USDC balance</p>
+            <p className="mt-1 text-2xl font-semibold text-zinc-100">
+              {loading ? "Loading..." : `${usdcBalance ?? "0"} USDC`}
+            </p>
+            <div className="mt-3 flex items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2">
+              <div className="min-w-0">
+                <p className="text-[11px] text-zinc-500">Deposit ATA</p>
+                <p className="truncate text-sm text-zinc-200">
+                  {details ? truncateAddress(details.platformWalletUsdcAta, 6, 6) : "Unavailable"}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={!details}
+                onClick={async () => {
+                  if (!details) return
+                  await navigator.clipboard.writeText(details.platformWalletUsdcAta)
+                }}
+                className="rounded-md border border-zinc-800 p-2 text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Copy platform wallet ATA"
+              >
+                <Copy className="size-3.5" />
+              </button>
+            </div>
+            {error && (
+              <p className="mt-2 text-xs text-red-400">{error}</p>
+            )}
+          </div>
+        </div>
+        <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => router.push("/studio")}>
           <Video className="mr-2 size-4" />
           Stream Studio
