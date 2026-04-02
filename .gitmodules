@@ -1,0 +1,3 @@
+[submodule "switched_fun_program"]
+	path = switched_fun_program
+	url = https://github.com/inspi-writer001/switched_fun_program.git

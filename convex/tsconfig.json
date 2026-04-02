@@ -11,6 +11,10 @@
     "jsx": "react-jsx",
     "skipLibCheck": true,
     "allowSyntheticDefaultImports": true,
+    "baseUrl": "..",
+    "paths": {
+      "@solana/kit": ["./node_modules/.pnpm/node_modules/@solana/kit"]
+    },
 
     /* These compiler options are required by Convex */
     "target": "ESNext",

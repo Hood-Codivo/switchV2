@@ -21,10 +21,22 @@ import { Button } from "@/components/ui/button"
 
 function getSolanaWalletAddress(privyUser: PrivyUser | null): string | null {
   if (!privyUser) return null
-  const solanaWallet = privyUser.linkedAccounts?.find(
-    (a) => a.type === "wallet" && "chainType" in a && a.chainType === "solana",
+
+  const solanaWallets = privyUser.linkedAccounts?.filter(
+    (account) => account.type === "wallet" && "chainType" in account && account.chainType === "solana",
+  ) ?? []
+
+  const embeddedWallet = solanaWallets.find(
+    (account) =>
+      "walletClientType" in account &&
+      (account.walletClientType === "privy" || account.walletClientType === "privy-v2"),
   )
-  if (solanaWallet && "address" in solanaWallet) return solanaWallet.address
+
+  if (embeddedWallet && "address" in embeddedWallet) return embeddedWallet.address
+
+  const fallbackWallet = solanaWallets.find((account) => "address" in account)
+  if (fallbackWallet && "address" in fallbackWallet) return fallbackWallet.address
+
   return privyUser.wallet?.address ?? null
 }
 
