@@ -332,7 +332,12 @@ export const goLive = action({
 export const listPastStreams = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthenticatedUser(ctx)
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      return []
+    }
 
     const streams = await ctx.db
       .query("streams")

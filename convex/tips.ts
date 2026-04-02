@@ -137,7 +137,12 @@ export const recordBroadcastTip = internalMutation({
 export const listMyTipHistory = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthenticatedUser(ctx)
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      return []
+    }
 
     const [sent, received] = await Promise.all([
       ctx.db

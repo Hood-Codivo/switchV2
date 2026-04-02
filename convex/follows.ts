@@ -12,7 +12,12 @@ type FollowUserInfo = {
 export const listFollowers = query({
   args: {},
   handler: async (ctx): Promise<FollowUserInfo[]> => {
-    const userId = await getAuthenticatedUser(ctx)
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      return []
+    }
 
     const follows = await ctx.db
       .query("follows")
@@ -38,7 +43,12 @@ export const listFollowers = query({
 export const listFollowing = query({
   args: {},
   handler: async (ctx): Promise<FollowUserInfo[]> => {
-    const userId = await getAuthenticatedUser(ctx)
+    let userId
+    try {
+      userId = await getAuthenticatedUser(ctx)
+    } catch {
+      return []
+    }
 
     const follows = await ctx.db
       .query("follows")
