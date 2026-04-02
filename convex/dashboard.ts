@@ -29,11 +29,11 @@ export const getDashboardOverview = query({
       .filter((q) => q.eq(q.field("status"), "ended"))
       .first()
 
-    // Count tips received
+    // Count tips received (capped to avoid unbounded reads)
     const receivedTips = await ctx.db
       .query("tipTransactions")
       .withIndex("by_to_user", (q) => q.eq("toUserId", userId))
-      .collect()
+      .take(1000)
 
     // Unread notifications
     const unreadNotifications = await ctx.db

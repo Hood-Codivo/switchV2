@@ -63,8 +63,8 @@ describe("dashboard.getDashboardOverview", () => {
   it("returns zeroed overview for a new user with no activity", async () => {
     const t = convexTest(schema, modules)
 
-    const userId = await t.run(async (ctx) => {
-      return seedUser(ctx, "newuser")
+    await t.run(async (ctx) => {
+      await seedUser(ctx, "newuser")
     })
 
     const result = await t
