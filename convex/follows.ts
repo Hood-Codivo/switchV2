@@ -25,19 +25,15 @@ export const listFollowers = query({
       .withIndex("by_creator", (q) => q.eq("creatorId", userId))
       .collect()
 
-    const followers: FollowUserInfo[] = []
-    for (const follow of follows) {
-      const user = await ctx.db.get(follow.followerId)
-      if (user) {
-        followers.push({
-          _id: user._id,
-          username: user.username,
-          displayName: user.displayName,
-          avatarUrl: user.avatarUrl,
-        })
-      }
-    }
-    return followers
+    const users = await Promise.all(follows.map((f) => ctx.db.get(f.followerId)))
+    return users
+      .filter((u) => u !== null)
+      .map((u) => ({
+        _id: u._id,
+        username: u.username,
+        displayName: u.displayName,
+        avatarUrl: u.avatarUrl,
+      }))
   },
 })
 
@@ -56,19 +52,15 @@ export const listFollowing = query({
       .withIndex("by_follower", (q) => q.eq("followerId", userId))
       .collect()
 
-    const following: FollowUserInfo[] = []
-    for (const follow of follows) {
-      const user = await ctx.db.get(follow.creatorId)
-      if (user) {
-        following.push({
-          _id: user._id,
-          username: user.username,
-          displayName: user.displayName,
-          avatarUrl: user.avatarUrl,
-        })
-      }
-    }
-    return following
+    const users = await Promise.all(follows.map((f) => ctx.db.get(f.creatorId)))
+    return users
+      .filter((u) => u !== null)
+      .map((u) => ({
+        _id: u._id,
+        username: u.username,
+        displayName: u.displayName,
+        avatarUrl: u.avatarUrl,
+      }))
   },
 })
 

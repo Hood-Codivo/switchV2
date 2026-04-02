@@ -144,27 +144,32 @@ export const listMyTipHistory = query({
       return []
     }
 
+    // Fetch the most recent 100 from each direction, then merge and trim
     const [sent, received] = await Promise.all([
       ctx.db
         .query("tipTransactions")
         .withIndex("by_from_user", (q) => q.eq("fromUserId", userId))
-        .collect(),
+        .order("desc")
+        .take(100),
       ctx.db
         .query("tipTransactions")
         .withIndex("by_to_user", (q) => q.eq("toUserId", userId))
-        .collect(),
+        .order("desc")
+        .take(100),
     ])
 
-    // Build a set of counterparty user IDs to batch-fetch usernames
+    // Batch-fetch counterparty usernames in parallel
     const counterpartyIds = new Set<typeof userId>()
     for (const tx of sent) counterpartyIds.add(tx.toUserId)
     for (const tx of received) counterpartyIds.add(tx.fromUserId)
 
-    const userMap = new Map<string, string>()
-    for (const id of counterpartyIds) {
-      const user = await ctx.db.get(id)
-      userMap.set(id, user?.username ?? "Unknown")
-    }
+    const userEntries = await Promise.all(
+      [...counterpartyIds].map(async (id) => {
+        const user = await ctx.db.get(id)
+        return [id, user?.username ?? "Unknown"] as const
+      }),
+    )
+    const userMap = new Map(userEntries)
 
     type TipHistoryItem = {
       _id: string
@@ -196,7 +201,7 @@ export const listMyTipHistory = query({
 
     items.sort((a, b) => b.createdAt - a.createdAt)
 
-    return items
+    return items.slice(0, 100)
   },
 })
 
