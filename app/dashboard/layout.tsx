@@ -1,4 +1,5 @@
 import { AuthGuard } from "@/components/auth-guard"
+import { OnboardingGuard } from "@/components/onboarding-guard"
 import { DashboardHeader } from "@/components/dashboard/dashboard-header"
 import {
   DashboardSidebar,
@@ -13,6 +14,7 @@ export default function DashboardLayout({
 }) {
   return (
     <AuthGuard>
+      <OnboardingGuard>
       <TooltipProvider>
         <SidebarProvider>
           <div className="dark flex h-screen bg-background text-foreground">
@@ -27,6 +29,7 @@ export default function DashboardLayout({
           </div>
         </SidebarProvider>
       </TooltipProvider>
+      </OnboardingGuard>
     </AuthGuard>
   )
 }
