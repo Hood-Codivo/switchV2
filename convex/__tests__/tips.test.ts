@@ -176,6 +176,134 @@ describe("tips.getStreamTipTotal", () => {
   })
 })
 
+// ─── listMyTipHistory ────────────────────────────────────────────────────────
+
+describe("tips.listMyTipHistory", () => {
+  it("returns sent and received tips with correct direction and counterparty", async () => {
+    const t = convexTest(schema, modules)
+    const alice = await t.run(async (ctx) => seedUser(ctx, "alice", 500))
+    const bob = await t.run(async (ctx) => seedUser(ctx, "bob", 500))
+    const streamByBob = await t.run(async (ctx) => seedLiveStream(ctx, bob, "bob"))
+    const streamByAlice = await t.run(async (ctx) => seedLiveStream(ctx, alice, "alice"))
+
+    // Alice tips Bob
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.tips.sendTip, {
+      streamId: streamByBob,
+      amount: 30,
+      message: "Nice!",
+    })
+
+    // Bob tips Alice
+    await t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.tips.sendTip, {
+      streamId: streamByAlice,
+      amount: 20,
+      message: "Thanks!",
+    })
+
+    // Alice's history should show one sent and one received
+    const aliceHistory = await t
+      .withIdentity({ subject: "did:privy:test-alice" })
+      .query(api.tips.listMyTipHistory, {})
+
+    expect(aliceHistory).toHaveLength(2)
+
+    const aliceSent = aliceHistory.find((tx) => tx.direction === "sent")
+    const aliceReceived = aliceHistory.find((tx) => tx.direction === "received")
+
+    expect(aliceSent).toBeDefined()
+    expect(aliceSent!.counterpartyUsername).toBe("bob")
+    expect(aliceSent!.amount).toBe(30)
+    expect(aliceSent!.message).toBe("Nice!")
+
+    expect(aliceReceived).toBeDefined()
+    expect(aliceReceived!.counterpartyUsername).toBe("bob")
+    expect(aliceReceived!.amount).toBe(20)
+  })
+
+  it("returns empty array when user has no transactions", async () => {
+    const t = convexTest(schema, modules)
+    await t.run(async (ctx) => seedUser(ctx, "lonely", 100))
+
+    const history = await t
+      .withIdentity({ subject: "did:privy:test-lonely" })
+      .query(api.tips.listMyTipHistory, {})
+
+    expect(history).toHaveLength(0)
+  })
+
+  it("sorts results by createdAt descending (most recent first)", async () => {
+    const t = convexTest(schema, modules)
+    const creator = await t.run(async (ctx) => seedUser(ctx, "creator", 0))
+    const stream = await t.run(async (ctx) => seedLiveStream(ctx, creator, "creator"))
+    await t.run(async (ctx) => seedUser(ctx, "tipper", 1000))
+
+    await t.withIdentity({ subject: "did:privy:test-tipper" }).mutation(api.tips.sendTip, {
+      streamId: stream,
+      amount: 10,
+    })
+    await t.withIdentity({ subject: "did:privy:test-tipper" }).mutation(api.tips.sendTip, {
+      streamId: stream,
+      amount: 20,
+    })
+
+    const history = await t
+      .withIdentity({ subject: "did:privy:test-tipper" })
+      .query(api.tips.listMyTipHistory, {})
+
+    expect(history).toHaveLength(2)
+    expect(history[0].createdAt).toBeGreaterThanOrEqual(history[1].createdAt)
+  })
+})
+
+// ─── withdraw ────────────────────────────────────────────────────────────────
+
+describe("tips.withdraw", () => {
+  it("deducts the requested amount from user balance", async () => {
+    const t = convexTest(schema, modules)
+    const userId = await t.run(async (ctx) => seedUser(ctx, "withdrawer", 500))
+
+    const result = await t
+      .withIdentity({ subject: "did:privy:test-withdrawer" })
+      .mutation(api.tips.withdraw, { amount: 200 })
+
+    expect(result.success).toBe(true)
+    expect(result.newBalance).toBe(300)
+
+    const user = await t.run(async (ctx) => ctx.db.get(userId))
+    expect(user?.pointsBalance).toBe(300)
+  })
+
+  it("rejects withdrawal with insufficient balance", async () => {
+    const t = convexTest(schema, modules)
+    await t.run(async (ctx) => seedUser(ctx, "broke", 50))
+
+    await expect(
+      t.withIdentity({ subject: "did:privy:test-broke" }).mutation(api.tips.withdraw, { amount: 100 }),
+    ).rejects.toThrow("Insufficient")
+  })
+
+  it("rejects zero or negative withdrawal amounts", async () => {
+    const t = convexTest(schema, modules)
+    await t.run(async (ctx) => seedUser(ctx, "badactor", 500))
+
+    await expect(
+      t.withIdentity({ subject: "did:privy:test-badactor" }).mutation(api.tips.withdraw, { amount: 0 }),
+    ).rejects.toThrow("Invalid")
+
+    await expect(
+      t.withIdentity({ subject: "did:privy:test-badactor" }).mutation(api.tips.withdraw, { amount: -10 }),
+    ).rejects.toThrow("Invalid")
+  })
+
+  it("rejects unauthenticated withdrawals", async () => {
+    const t = convexTest(schema, modules)
+
+    await expect(
+      t.mutation(api.tips.withdraw, { amount: 10 }),
+    ).rejects.toThrow("Not authenticated")
+  })
+})
+
 // ─── getBalance ───────────────────────────────────────────────────────────────
 
 describe("tips.getBalance", () => {

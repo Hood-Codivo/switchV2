@@ -325,6 +325,36 @@ export const goLive = action({
   },
 })
 
+// ─── listPastStreams ─────────────────────────────────────────────────────────
+// Returns all ended streams for the authenticated user, ordered most-recent
+// first. Used by the /dashboard/streams history page.
+
+export const listPastStreams = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthenticatedUser(ctx)
+
+    const streams = await ctx.db
+      .query("streams")
+      .withIndex("by_creator", (q) => q.eq("creatorId", userId))
+      .order("desc")
+      .filter((q) => q.eq(q.field("status"), "ended"))
+      .collect()
+
+    return streams.map((s) => ({
+      _id: s._id,
+      title: s.title,
+      category: s.category,
+      viewerCount: s.viewerCount,
+      peakViewerCount: s.peakViewerCount,
+      tipTotal: s.tipTotal ?? 0,
+      startedAt: s.startedAt,
+      endedAt: s.endedAt,
+      playbackUrl: s.playbackUrl,
+    }))
+  },
+})
+
 // ─── endLivestream ────────────────────────────────────────────────────────────
 
 export const endLivestream = action({

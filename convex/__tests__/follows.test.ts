@@ -166,3 +166,100 @@ describe("follows.getChannelPage", () => {
     expect(page?.followerCount).toBe(1)
   })
 })
+
+// ─── removeFollower ───────────────────────────────────────────────────────
+
+describe("follows.removeFollower", () => {
+  it("deletes the follow relationship and decrements the creator's follower count", async () => {
+    const t = convexTest(schema, modules)
+    const aliceId = await t.run(async (ctx) => seedUser(ctx, { username: "alice" }))
+    const bobId = await t.run(async (ctx) => seedUser(ctx, { username: "bob" }))
+
+    // Bob follows Alice
+    await t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.follows.followUser, { creatorId: aliceId })
+
+    // Alice removes Bob as a follower
+    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.follows.removeFollower, { followerId: bobId })
+
+    const page = await t.query(api.follows.getChannelPage, { username: "alice" })
+    expect(page?.followerCount).toBe(0)
+
+    // Confirm the follow relationship no longer exists
+    const state = await t
+      .withIdentity({ subject: "did:privy:test-bob" })
+      .query(api.follows.getFollowState, { creatorId: aliceId })
+    expect(state).toBe(false)
+  })
+
+  it("is a no-op when the target is not a follower", async () => {
+    const t = convexTest(schema, modules)
+    const aliceId = await t.run(async (ctx) => seedUser(ctx, { username: "alice" }))
+    const bobId = await t.run(async (ctx) => seedUser(ctx, { username: "bob" }))
+
+    // Alice tries to remove Bob who never followed her
+    await expect(
+      t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.follows.removeFollower, { followerId: bobId }),
+    ).resolves.not.toThrow()
+
+    const page = await t.query(api.follows.getChannelPage, { username: "alice" })
+    expect(page?.followerCount).toBe(0)
+  })
+})
+
+// ─── listFollowers ────────────────────────────────────────────────────────
+
+describe("follows.listFollowers", () => {
+  it("returns an empty list when the user has no followers", async () => {
+    const t = convexTest(schema, modules)
+    await t.run(async (ctx) => seedUser(ctx, { username: "alice" }))
+
+    const followers = await t
+      .withIdentity({ subject: "did:privy:test-alice" })
+      .query(api.follows.listFollowers)
+    expect(followers).toEqual([])
+  })
+
+  it("returns follower info after someone follows the user", async () => {
+    const t = convexTest(schema, modules)
+    const aliceId = await t.run(async (ctx) => seedUser(ctx, { username: "alice" }))
+    await t.run(async (ctx) => seedUser(ctx, { username: "bob", displayName: "Bob" }))
+
+    await t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.follows.followUser, { creatorId: aliceId })
+
+    const followers = await t
+      .withIdentity({ subject: "did:privy:test-alice" })
+      .query(api.follows.listFollowers)
+    expect(followers).toHaveLength(1)
+    expect(followers[0].username).toBe("bob")
+    expect(followers[0].displayName).toBe("Bob")
+  })
+})
+
+// ─── listFollowing ────────────────────────────────────────────────────────
+
+describe("follows.listFollowing", () => {
+  it("returns an empty list when the user follows nobody", async () => {
+    const t = convexTest(schema, modules)
+    await t.run(async (ctx) => seedUser(ctx, { username: "alice" }))
+
+    const following = await t
+      .withIdentity({ subject: "did:privy:test-alice" })
+      .query(api.follows.listFollowing)
+    expect(following).toEqual([])
+  })
+
+  it("returns followed creators after the user follows them", async () => {
+    const t = convexTest(schema, modules)
+    const aliceId = await t.run(async (ctx) => seedUser(ctx, { username: "alice", displayName: "Alice" }))
+    await t.run(async (ctx) => seedUser(ctx, { username: "bob" }))
+
+    await t.withIdentity({ subject: "did:privy:test-bob" }).mutation(api.follows.followUser, { creatorId: aliceId })
+
+    const following = await t
+      .withIdentity({ subject: "did:privy:test-bob" })
+      .query(api.follows.listFollowing)
+    expect(following).toHaveLength(1)
+    expect(following[0].username).toBe("alice")
+    expect(following[0].displayName).toBe("Alice")
+  })
+})

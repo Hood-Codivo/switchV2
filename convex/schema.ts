@@ -191,6 +191,12 @@ export default defineSchema({
     pointsBalance: v.optional(v.number()),
     followerCount: v.optional(v.number()),
     createdAt: v.optional(v.number()),
+    // Stream preferences
+    defaultCategory: v.optional(categoryValidator),
+    defaultSlowModeInterval: v.optional(v.number()),
+    // Notification preferences
+    notifyGoLive: v.optional(v.boolean()),
+    notifyTips: v.optional(v.boolean()),
   })
     .index("by_privyDid", ["privyDid"])
     .index("by_username", ["username"]),

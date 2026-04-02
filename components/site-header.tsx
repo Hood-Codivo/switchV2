@@ -7,7 +7,7 @@ import { useConvex, useQuery } from "convex/react"
 import { usePrivy } from "@privy-io/react-auth"
 import QRCode from "react-qr-code"
 import { api } from "@/convex/_generated/api"
-import { Search, ChevronDown, User, Video, Copy } from "lucide-react"
+import { Search, ChevronDown, User, Video, Copy, Settings } from "lucide-react"
 import { NotificationBell } from "@/components/notification-bell"
 import { Button } from "@/components/ui/button"
 import { usePlatformWallet } from "@/hooks/use-platform-wallet"
@@ -122,6 +122,10 @@ function ProfileDropdown() {
         <DropdownMenuItem onClick={() => router.push(`/${currentUser?.username}`)}>
           <User className="mr-2 size-4" />
           My Channel
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => router.push("/dashboard/settings/profile")}>
+          <Settings className="mr-2 size-4" />
+          Settings
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem

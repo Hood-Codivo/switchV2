@@ -126,8 +126,12 @@ export const fanOutGoLiveNotifications = internalMutation({
 
     const now = Date.now()
     await Promise.all(
-      followers.map((f) =>
-        ctx.db.insert("notifications", {
+      followers.map(async (f) => {
+        // Respect the follower's notification preference
+        const follower = await ctx.db.get(f.followerId)
+        if (follower?.notifyGoLive === false) return
+
+        return ctx.db.insert("notifications", {
           userId: f.followerId,
           type: "go-live",
           streamId,
@@ -137,8 +141,8 @@ export const fanOutGoLiveNotifications = internalMutation({
           streamTitle,
           read: false,
           createdAt: now,
-        }),
-      ),
+        })
+      }),
     )
   },
 })

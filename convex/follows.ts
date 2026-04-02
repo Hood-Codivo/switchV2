@@ -2,6 +2,89 @@ import { v } from "convex/values"
 import { mutation, query } from "./_generated/server"
 import { getAuthenticatedUser } from "./auth"
 
+type FollowUserInfo = {
+  _id: string
+  username: string | undefined
+  displayName: string | undefined
+  avatarUrl: string | null | undefined
+}
+
+export const listFollowers = query({
+  args: {},
+  handler: async (ctx): Promise<FollowUserInfo[]> => {
+    const userId = await getAuthenticatedUser(ctx)
+
+    const follows = await ctx.db
+      .query("follows")
+      .withIndex("by_creator", (q) => q.eq("creatorId", userId))
+      .collect()
+
+    const followers: FollowUserInfo[] = []
+    for (const follow of follows) {
+      const user = await ctx.db.get(follow.followerId)
+      if (user) {
+        followers.push({
+          _id: user._id,
+          username: user.username,
+          displayName: user.displayName,
+          avatarUrl: user.avatarUrl,
+        })
+      }
+    }
+    return followers
+  },
+})
+
+export const listFollowing = query({
+  args: {},
+  handler: async (ctx): Promise<FollowUserInfo[]> => {
+    const userId = await getAuthenticatedUser(ctx)
+
+    const follows = await ctx.db
+      .query("follows")
+      .withIndex("by_follower", (q) => q.eq("followerId", userId))
+      .collect()
+
+    const following: FollowUserInfo[] = []
+    for (const follow of follows) {
+      const user = await ctx.db.get(follow.creatorId)
+      if (user) {
+        following.push({
+          _id: user._id,
+          username: user.username,
+          displayName: user.displayName,
+          avatarUrl: user.avatarUrl,
+        })
+      }
+    }
+    return following
+  },
+})
+
+export const removeFollower = mutation({
+  args: { followerId: v.id("users") },
+  handler: async (ctx, { followerId }) => {
+    const creatorId = await getAuthenticatedUser(ctx)
+
+    const existing = await ctx.db
+      .query("follows")
+      .withIndex("by_follower_and_creator", (q) =>
+        q.eq("followerId", followerId).eq("creatorId", creatorId),
+      )
+      .unique()
+    if (!existing) return // not a follower — no-op
+
+    await ctx.db.delete(existing._id)
+
+    const creator = await ctx.db.get(creatorId)
+    if (creator) {
+      await ctx.db.patch(creatorId, {
+        followerCount: Math.max(0, (creator.followerCount ?? 0) - 1),
+      })
+    }
+  },
+})
+
 export const getChannelPage = query({
   args: { username: v.string() },
   handler: async (ctx, { username }) => {

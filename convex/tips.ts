@@ -132,6 +132,93 @@ export const recordBroadcastTip = internalMutation({
   },
 })
 
+// ─── listMyTipHistory ────────────────────────────────────────────────────────
+
+export const listMyTipHistory = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthenticatedUser(ctx)
+
+    const [sent, received] = await Promise.all([
+      ctx.db
+        .query("tipTransactions")
+        .withIndex("by_from_user", (q) => q.eq("fromUserId", userId))
+        .collect(),
+      ctx.db
+        .query("tipTransactions")
+        .withIndex("by_to_user", (q) => q.eq("toUserId", userId))
+        .collect(),
+    ])
+
+    // Build a set of counterparty user IDs to batch-fetch usernames
+    const counterpartyIds = new Set<string>()
+    for (const tx of sent) counterpartyIds.add(tx.toUserId)
+    for (const tx of received) counterpartyIds.add(tx.fromUserId)
+
+    const userMap = new Map<string, string>()
+    for (const id of counterpartyIds) {
+      const user = await ctx.db.get(id as typeof userId)
+      userMap.set(id, user?.username ?? "Unknown")
+    }
+
+    type TipHistoryItem = {
+      _id: string
+      direction: "sent" | "received"
+      counterpartyUsername: string
+      amount: number
+      message: string | undefined
+      createdAt: number
+    }
+
+    const items: TipHistoryItem[] = [
+      ...sent.map((tx) => ({
+        _id: tx._id,
+        direction: "sent" as const,
+        counterpartyUsername: userMap.get(tx.toUserId) ?? "Unknown",
+        amount: tx.amount,
+        message: tx.message,
+        createdAt: tx.createdAt,
+      })),
+      ...received.map((tx) => ({
+        _id: tx._id,
+        direction: "received" as const,
+        counterpartyUsername: userMap.get(tx.fromUserId) ?? "Unknown",
+        amount: tx.amount,
+        message: tx.message,
+        createdAt: tx.createdAt,
+      })),
+    ]
+
+    items.sort((a, b) => b.createdAt - a.createdAt)
+
+    return items
+  },
+})
+
+// ─── withdraw ────────────────────────────────────────────────────────────────
+
+export const withdraw = mutation({
+  args: {
+    amount: v.number(),
+  },
+  handler: async (ctx, { amount }) => {
+    const userId = await getAuthenticatedUser(ctx)
+
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error("Invalid withdrawal amount")
+
+    const user = await ctx.db.get(userId)
+    if (!user) throw new Error("User not found")
+
+    const balance = user.pointsBalance ?? 0
+    if (balance < amount) throw new Error("Insufficient balance")
+
+    // Deduct balance
+    await ctx.db.patch(userId, { pointsBalance: balance - amount })
+
+    return { success: true, newBalance: balance - amount }
+  },
+})
+
 // ─── getStreamTipTotal ────────────────────────────────────────────────────────
 
 export const getStreamTipTotal = query({

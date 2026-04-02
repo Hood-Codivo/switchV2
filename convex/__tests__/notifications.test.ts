@@ -209,6 +209,100 @@ describe("notifications.markAllRead", () => {
     const count = await t.withIdentity({ subject: "did:privy:test-follower" }).query(api.notifications.getUnreadCount, {})
     expect(count).toBe(0)
   })
+
+  it("bulk mark-as-read updates all unread notifications", async () => {
+    const t = convexTest(schema, modules)
+    const creatorId = await t.run(async (ctx) => seedUser(ctx, "creator"))
+    const followerId = await t.run(async (ctx) => seedUser(ctx, "follower"))
+    await t.run(async (ctx) => seedFollow(ctx, followerId, creatorId))
+    const s1 = await t.run(async (ctx) => seedLiveStream(ctx, creatorId, "creator"))
+
+    // Create three notifications
+    for (const title of ["Stream A", "Stream B", "Stream C"]) {
+      await t.mutation(internal.notifications.fanOutGoLiveNotifications, {
+        streamId: s1,
+        creatorId,
+        creatorName: "creator",
+        creatorUsername: "creator",
+        streamTitle: title,
+      })
+    }
+
+    // Verify all three are unread
+    const beforeCount = await t
+      .withIdentity({ subject: "did:privy:test-follower" })
+      .query(api.notifications.getUnreadCount, {})
+    expect(beforeCount).toBe(3)
+
+    // Mark all as read
+    await t.withIdentity({ subject: "did:privy:test-follower" }).mutation(api.notifications.markAllRead, {})
+
+    // All should now be read
+    const afterCount = await t
+      .withIdentity({ subject: "did:privy:test-follower" })
+      .query(api.notifications.getUnreadCount, {})
+    expect(afterCount).toBe(0)
+
+    // Every notification in the list should have read === true
+    const notifs = await t
+      .withIdentity({ subject: "did:privy:test-follower" })
+      .query(api.notifications.list, {})
+    expect(notifs).toHaveLength(3)
+    expect(notifs.every((n) => n.read === true)).toBe(true)
+  })
+})
+
+// ─── markRead: individual only ───────────────────────────────────────────────
+
+describe("notifications.markRead (individual target only)", () => {
+  it("marks only the target notification, leaving others unread", async () => {
+    const t = convexTest(schema, modules)
+    const creatorId = await t.run(async (ctx) => seedUser(ctx, "creator"))
+    const followerId = await t.run(async (ctx) => seedUser(ctx, "follower"))
+    await t.run(async (ctx) => seedFollow(ctx, followerId, creatorId))
+    const s1 = await t.run(async (ctx) => seedLiveStream(ctx, creatorId, "creator"))
+
+    // Create two notifications
+    await t.mutation(internal.notifications.fanOutGoLiveNotifications, {
+      streamId: s1,
+      creatorId,
+      creatorName: "creator",
+      creatorUsername: "creator",
+      streamTitle: "Stream X",
+    })
+    await t.mutation(internal.notifications.fanOutGoLiveNotifications, {
+      streamId: s1,
+      creatorId,
+      creatorName: "creator",
+      creatorUsername: "creator",
+      streamTitle: "Stream Y",
+    })
+
+    const notifs = await t
+      .withIdentity({ subject: "did:privy:test-follower" })
+      .query(api.notifications.list, {})
+    expect(notifs).toHaveLength(2)
+
+    // Mark only the first one as read
+    await t
+      .withIdentity({ subject: "did:privy:test-follower" })
+      .mutation(api.notifications.markRead, { notificationId: notifs[0]._id })
+
+    // One should still be unread
+    const afterCount = await t
+      .withIdentity({ subject: "did:privy:test-follower" })
+      .query(api.notifications.getUnreadCount, {})
+    expect(afterCount).toBe(1)
+
+    // Verify exactly which one was marked
+    const afterNotifs = await t
+      .withIdentity({ subject: "did:privy:test-follower" })
+      .query(api.notifications.list, {})
+    const markedNotif = afterNotifs.find((n) => n._id === notifs[0]._id)
+    const untouchedNotif = afterNotifs.find((n) => n._id === notifs[1]._id)
+    expect(markedNotif?.read).toBe(true)
+    expect(untouchedNotif?.read).toBe(false)
+  })
 })
 
 // ─── savePushSubscription ─────────────────────────────────────────────────────
