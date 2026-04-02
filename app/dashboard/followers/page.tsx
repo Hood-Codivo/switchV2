@@ -42,7 +42,7 @@ function UserRow({
   onAction,
 }: {
   user: {
-    _id: string
+    _id: Id<"users">
     username: string | undefined
     displayName: string | undefined
     avatarUrl: string | null | undefined
@@ -71,7 +71,7 @@ function UserRow({
       <Button
         variant="destructive"
         size="sm"
-        onClick={() => onAction(user._id as Id<"users">)}
+        onClick={() => onAction(user._id)}
       >
         <UserMinus data-icon="inline-start" />
         {actionLabel}

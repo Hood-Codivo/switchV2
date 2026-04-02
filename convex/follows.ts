@@ -1,9 +1,10 @@
 import { v } from "convex/values"
 import { mutation, query } from "./_generated/server"
 import { getAuthenticatedUser } from "./auth"
+import type { Id } from "./_generated/dataModel"
 
 type FollowUserInfo = {
-  _id: string
+  _id: Id<"users">
   username: string | undefined
   displayName: string | undefined
   avatarUrl: string | null | undefined

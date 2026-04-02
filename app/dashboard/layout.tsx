@@ -15,20 +15,20 @@ export default function DashboardLayout({
   return (
     <AuthGuard>
       <OnboardingGuard>
-      <TooltipProvider>
-        <SidebarProvider>
-          <div className="dark flex h-screen bg-background text-foreground">
-            {/* Sidebar: full height */}
-            <DashboardSidebar />
+        <TooltipProvider>
+          <SidebarProvider>
+            <div className="dark flex h-screen bg-background text-foreground">
+              {/* Sidebar: full height */}
+              <DashboardSidebar />
 
-            {/* Content column: header + page */}
-            <div className="flex flex-1 flex-col overflow-hidden">
-              <DashboardHeader />
-              <main className="flex-1 overflow-y-auto p-6">{children}</main>
+              {/* Content column: header + page */}
+              <div className="flex flex-1 flex-col overflow-hidden">
+                <DashboardHeader />
+                <main className="flex-1 overflow-y-auto p-6">{children}</main>
+              </div>
             </div>
-          </div>
-        </SidebarProvider>
-      </TooltipProvider>
+          </SidebarProvider>
+        </TooltipProvider>
       </OnboardingGuard>
     </AuthGuard>
   )

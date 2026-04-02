@@ -156,13 +156,13 @@ export const listMyTipHistory = query({
     ])
 
     // Build a set of counterparty user IDs to batch-fetch usernames
-    const counterpartyIds = new Set<string>()
+    const counterpartyIds = new Set<typeof userId>()
     for (const tx of sent) counterpartyIds.add(tx.toUserId)
     for (const tx of received) counterpartyIds.add(tx.fromUserId)
 
     const userMap = new Map<string, string>()
     for (const id of counterpartyIds) {
-      const user = await ctx.db.get(id as typeof userId)
+      const user = await ctx.db.get(id)
       userMap.set(id, user?.username ?? "Unknown")
     }
 
