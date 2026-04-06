@@ -54,6 +54,7 @@ export function getPlatformWalletConfig(): PlatformWalletConfig {
 export async function deriveAssociatedTokenAddress(
   ownerAddress: string,
   mintAddress: string,
+  tokenProgramAddress: ReturnType<typeof address> = TOKEN_PROGRAM_ADDRESS,
 ) {
   const encoder = getAddressEncoder()
 
@@ -61,12 +62,24 @@ export async function deriveAssociatedTokenAddress(
     programAddress: ASSOCIATED_TOKEN_PROGRAM_ADDRESS,
     seeds: [
       encoder.encode(address(ownerAddress)),
-      encoder.encode(TOKEN_PROGRAM_ADDRESS),
+      encoder.encode(tokenProgramAddress),
       encoder.encode(address(mintAddress)),
     ],
   })
 
   return associatedTokenAddress
+}
+
+export async function fetchMintProgramAddress(mintAddress: string) {
+  const { rpcUrl } = getPlatformWalletConfig()
+  const rpc = createSolanaRpc(rpcUrl as Parameters<typeof createSolanaRpc>[0])
+  const mintAccount = await fetchEncodedAccount(rpc, address(mintAddress))
+
+  if (!mintAccount.exists) {
+    throw new Error(`Mint account not found: ${mintAddress}`)
+  }
+
+  return mintAccount.programAddress
 }
 
 export async function derivePlatformWallet(userWalletAddress: string): Promise<PlatformWalletDetails> {
@@ -213,6 +226,19 @@ export async function fetchWalletMintBalance(
 
 export async function fetchWalletUsdcBalance(walletAddress: string) {
   return fetchWalletMintBalance(walletAddress, getPlatformWalletConfig().usdcMint)
+}
+
+export async function fetchSolBalance(walletAddress: string) {
+  const { rpcUrl } = getPlatformWalletConfig()
+  const rpc = createSolanaRpc(rpcUrl as Parameters<typeof createSolanaRpc>[0])
+  const response = await rpc
+    .getBalance(address(walletAddress), { commitment: "confirmed" })
+    .send()
+
+  return {
+    lamports: response.value.toString(),
+    sol: (Number(response.value) / 10 ** 9).toString(),
+  }
 }
 
 export async function checkPlatformWalletProfileExists(
