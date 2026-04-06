@@ -7,6 +7,8 @@ import { useRealtimeKitClient } from "@cloudflare/realtimekit-react"
 import type RTKClient from "@cloudflare/realtimekit"
 import { STUDIO_LAYOUT_MAP, DEFAULT_LAYOUT_ID } from "@/lib/studio-layouts"
 import type { LayoutConfig } from "@/lib/studio-layouts"
+import { getOptimalLayout } from "@/lib/auto-layout"
+import type { StageSource } from "@/lib/auto-layout"
 import type { Id } from "@/convex/_generated/dataModel"
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -139,6 +141,9 @@ export function useStudio(): UseStudioReturn {
   const animFrameRef = useRef<number | null>(null)
   const isActiveRef = useRef(false)
   const hasAutoConnectedRef = useRef(false)
+  const autoLayoutDisabledRef = useRef(false)
+  const sourceAddedAtRef = useRef<Map<string, number>>(new Map())
+  const preScreenShareSnapshotRef = useRef<{ layoutId: string } | null>(null)
 
   const createSession = useAction(api.studio.createStudioSession)
   const endSessionAction = useAction(api.studio.endStudioSession)
@@ -374,6 +379,9 @@ export function useStudio(): UseStudioReturn {
 
     refreshSources()
     const selfCamera = sourcesRef.current.find((s) => s.id === `${client.self.id}:camera`) ?? null
+    if (selfCamera) {
+      sourceAddedAtRef.current.set(selfCamera.id, Date.now())
+    }
     const layout = STUDIO_LAYOUT_MAP[DEFAULT_LAYOUT_ID]
     const initialSlots: (StudioSource | null)[] = layout.slots.map((_, i) => (i === 0 ? selfCamera : null))
     setOnCanvasSlots(initialSlots)
@@ -499,16 +507,54 @@ export function useStudio(): UseStudioReturn {
 
   // ─── Canvas slot management ───────────────────────────────────────────────
 
+  function serializeParticipantIds(slots: (StudioSource | null)[]): string[] {
+    return slots.filter(Boolean).map((s) =>
+      `${s!.customParticipantId}:${s!.type === "screenshare" ? "screen" : "camera"}`
+    )
+  }
+
+  const applyAutoLayout = useCallback(
+    (activeSources: StudioSource[]) => {
+      const stageSources: StageSource[] = activeSources.map((s) => ({
+        id: s.id,
+        type: s.type === "screenshare" ? "screen" as const : "camera" as const,
+        addedAt: sourceAddedAtRef.current.get(s.id) ?? Date.now(),
+      }))
+
+      const result = getOptimalLayout(stageSources)
+      if (!result) return
+
+      const layout = STUDIO_LAYOUT_MAP[result.layoutId]
+      if (!layout) return
+
+      activeLayoutRef.current = layout
+      _setActiveLayoutId(result.layoutId)
+
+      const newSlots: (StudioSource | null)[] = layout.slots.map((_, i) => {
+        const assignedId = result.slotAssignments[i]
+        if (!assignedId) return null
+        return activeSources.find((s) => s.id === assignedId) ?? null
+      })
+
+      setOnCanvasSlots(newSlots)
+      void updateStageMutation({ stageParticipantIds: serializeParticipantIds(newSlots), stageLayoutId: result.layoutId }).catch(() => {})
+    },
+    [setOnCanvasSlots, updateStageMutation],
+  )
+
   const toggleSourceOnCanvas = useCallback(
     (sourceId: string) => {
       const slots = [...onCanvasSlotsRef.current]
       const existingIdx = slots.findIndex((s) => s?.id === sourceId)
+      const isRemoving = existingIdx !== -1
 
-      if (existingIdx !== -1) {
+      if (isRemoving) {
         slots[existingIdx] = null
+        sourceAddedAtRef.current.delete(sourceId)
       } else {
         const source = sourcesRef.current.find((s) => s.id === sourceId)
         if (!source) return
+        sourceAddedAtRef.current.set(sourceId, Date.now())
         const emptyIdx = slots.findIndex((s) => s === null)
         if (emptyIdx !== -1) {
           slots[emptyIdx] = source
@@ -517,28 +563,47 @@ export function useStudio(): UseStudioReturn {
         }
       }
 
+      const activeSources = slots.filter((s): s is StudioSource => s !== null)
+      const hasScreenShare = activeSources.some((s) => s.type === "screenshare")
+      const hadScreenShareBefore = onCanvasSlotsRef.current
+        .filter((s): s is StudioSource => s !== null)
+        .some((s) => s.type === "screenshare")
+
+      // Snapshot: save on first screen share entering stage
+      if (hasScreenShare && !hadScreenShareBefore && !preScreenShareSnapshotRef.current) {
+        preScreenShareSnapshotRef.current = { layoutId: activeLayoutRef.current.id }
+      }
+
+      // Revert: last screen share removed — discard snapshot, re-arm auto-layout
+      if (!hasScreenShare && hadScreenShareBefore) {
+        preScreenShareSnapshotRef.current = null
+        autoLayoutDisabledRef.current = false
+      }
+
+      if (!autoLayoutDisabledRef.current) {
+        applyAutoLayout(activeSources)
+        return
+      }
+
+      // Manual mode — keep current layout, just update slots
       setOnCanvasSlots(slots)
-      const participantIds = slots.filter(Boolean).map((s) =>
-        `${s!.customParticipantId}:${s!.type === "screenshare" ? "screen" : "camera"}`
-      )
-      void updateStageMutation({ stageParticipantIds: participantIds, stageLayoutId: activeLayoutRef.current.id }).catch(() => {})
+      void updateStageMutation({ stageParticipantIds: serializeParticipantIds(slots), stageLayoutId: activeLayoutRef.current.id }).catch(() => {})
     },
-    [setOnCanvasSlots, updateStageMutation],
+    [setOnCanvasSlots, updateStageMutation, applyAutoLayout],
   )
 
   const switchLayout = useCallback(
     (layoutId: string) => {
       const layout = STUDIO_LAYOUT_MAP[layoutId]
       if (!layout) return
+      autoLayoutDisabledRef.current = true
+      preScreenShareSnapshotRef.current = null
       activeLayoutRef.current = layout
       _setActiveLayoutId(layoutId)
       // Trim/pad slots to the new slot count
       const newSlots = layout.slots.map((_, i) => onCanvasSlotsRef.current[i] ?? null)
       setOnCanvasSlots(newSlots)
-      const participantIds = newSlots.filter(Boolean).map((s) =>
-        `${s!.customParticipantId}:${s!.type === "screenshare" ? "screen" : "camera"}`
-      )
-      void updateStageMutation({ stageParticipantIds: participantIds, stageLayoutId: layoutId }).catch(() => {})
+      void updateStageMutation({ stageParticipantIds: serializeParticipantIds(newSlots), stageLayoutId: layoutId }).catch(() => {})
     },
     [setOnCanvasSlots, updateStageMutation],
   )
