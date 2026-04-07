@@ -3,6 +3,7 @@
 import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { usePlatformWallet } from "@/hooks/use-platform-wallet"
+import { useWalletMintBalance } from "@/hooks/use-wallet-mint-balance"
 import Link from "next/link"
 import {
   Radio,
@@ -17,6 +18,17 @@ import {
   ExternalLink,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+
+const SWITCHED_TOKEN_MINT = "mLpmTV7yBWUysSw9pQaqRqfhwcaYizSPVfPaRGycyai"
+
+function formatTokenBalance(value?: string | null) {
+  const amount = Number(value ?? "0")
+  if (!Number.isFinite(amount)) return "0.000"
+  return amount.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 3,
+  })
+}
 
 function StatCard({
   icon: Icon,
@@ -158,6 +170,10 @@ export default function DashboardOverviewPage() {
   const { usdcBalance, loading: walletLoading } = usePlatformWallet(
     currentUser?.walletAddress,
   )
+  const { balance: swtdBalance, loading: swtdLoading } = useWalletMintBalance(
+    currentUser?.walletAddress,
+    SWITCHED_TOKEN_MINT,
+  )
 
   if (overview === undefined) {
     return (
@@ -212,13 +228,13 @@ export default function DashboardOverviewPage() {
         <StatCard
           icon={Wallet}
           label="Balance"
-          value={`${overview.earningsSummary.walletBalance.toLocaleString()} pts`}
+          value={swtdLoading ? "..." : `${formatTokenBalance(swtdBalance)} $SWTD`}
           href="/dashboard/earnings"
         />
         <StatCard
           icon={Coins}
           label="USDC"
-          value={walletLoading ? "..." : `${usdcBalance ?? "0"} USDC`}
+          value={walletLoading ? "..." : `${formatTokenBalance(usdcBalance)} USDC`}
           href="/dashboard/earnings"
         />
         <StatCard
