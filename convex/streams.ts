@@ -224,6 +224,32 @@ export const listLiveStreams = query({
   },
 })
 
+// ─── listRecentStreams ────────────────────────────────────────────────────────
+
+export const listRecentStreams = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
+    const cap = limit ?? 8
+
+    const ended = await ctx.db
+      .query("streams")
+      .withIndex("by_status", (q) => q.eq("status", "ended"))
+      .order("desc")
+      .take(cap)
+
+    if (ended.length === 0) return []
+
+    const uniqueCreatorIds = [...new Set(ended.map((s) => s.creatorId))]
+    const creators = await Promise.all(uniqueCreatorIds.map((id) => ctx.db.get(id)))
+    const creatorById = new Map(uniqueCreatorIds.map((id, i) => [id, creators[i]]))
+
+    return ended.map((stream) => ({
+      stream,
+      creator: creatorById.get(stream.creatorId) ?? null,
+    }))
+  },
+})
+
 // ─── goLive ───────────────────────────────────────────────────────────────────
 // Starts an HLS livestream via the RTK REST API and marks the stream live in
 // Convex with the playback URL returned directly by Cloudflare — no socket
