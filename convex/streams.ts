@@ -3,11 +3,13 @@ import { action, internalMutation, internalQuery, mutation, query } from "./_gen
 import { getAuthenticatedUser } from "./auth"
 import { api, internal } from "./_generated/api"
 import { categoryValidator, streamBillingStateValidator, streamStatusValidator } from "./schema"
+import {
+  CHARGE_BLOCK_MINUTES,
+  STREAM_RATE_PER_HOUR_USD,
+  SWTD_USD_PRICE,
+} from "../lib/stream-billing"
 
-const STREAM_RATE_PER_HOUR_USD = 0.5
-const SWTD_USD_PRICE = 0.00000536288
 const MILLISECONDS_PER_MINUTE = 60_000
-const OVERTIME_BLOCK_MINUTES = 30
 const GRACE_PERIOD_MS = 60_000
 
 const streamSessionPlanValidator = v.object({
@@ -15,37 +17,6 @@ const streamSessionPlanValidator = v.object({
   allowExtraUsageSpending: v.boolean(),
   overtimeMinutes: v.number(),
 })
-
-function normalizeSessionPlan(
-  sessionPlan?: {
-    plannedMinutes: number
-    allowExtraUsageSpending: boolean
-    overtimeMinutes: number
-  } | null,
-) {
-  const plannedMinutes = sessionPlan?.plannedMinutes ?? 60
-  const allowExtraUsageSpending = sessionPlan?.allowExtraUsageSpending ?? false
-  const overtimeMinutes = allowExtraUsageSpending ? (sessionPlan?.overtimeMinutes ?? 30) : 0
-  const prepaidUsd = (plannedMinutes / 60) * STREAM_RATE_PER_HOUR_USD
-  const maxOvertimeUsd = allowExtraUsageSpending
-    ? (overtimeMinutes / 60) * STREAM_RATE_PER_HOUR_USD
-    : 0
-
-  return {
-    plannedMinutes,
-    allowExtraUsageSpending,
-    overtimeMinutes,
-    prepaidUsd,
-    prepaidSwtdAmount: (prepaidUsd / SWTD_USD_PRICE).toString(),
-    maxOvertimeUsd,
-    maxOvertimeSwtdAmount: (maxOvertimeUsd / SWTD_USD_PRICE).toString(),
-    billingState: "prepaid" as const,
-    remainingPrepaidMinutes: plannedMinutes,
-    remainingOvertimeMinutes: overtimeMinutes,
-    nextOvertimeChargeAt: undefined as number | undefined,
-    graceStartedAt: undefined as number | undefined,
-  }
-}
 
 // ─── getActiveSessionForCreator ───────────────────────────────────────────────
 
@@ -63,22 +34,41 @@ export const attachBillingPlanToSession = internalMutation({
   args: {
     sessionId: v.id("studioSessions"),
     billing: v.object({
-      plannedMinutes: v.number(),
+      spendingLimitMinutes: v.number(),
       allowExtraUsageSpending: v.boolean(),
-      overtimeMinutes: v.number(),
-      prepaidUsd: v.number(),
-      prepaidSwtdAmount: v.string(),
-      maxOvertimeUsd: v.number(),
-      maxOvertimeSwtdAmount: v.string(),
+      spendingLimitUsd: v.number(),
+      spendingLimitSwtdAmount: v.string(),
       billingState: streamBillingStateValidator,
-      remainingPrepaidMinutes: v.number(),
-      remainingOvertimeMinutes: v.number(),
-      nextOvertimeChargeAt: v.optional(v.number()),
+      chargedMinutes: v.number(),
+      remainingApprovedMinutes: v.number(),
+      chargeBlockMinutes: v.number(),
+      nextChargeAt: v.optional(v.number()),
       graceStartedAt: v.optional(v.number()),
     }),
   },
   handler: async (ctx, { sessionId, billing }) => {
     await ctx.db.patch(sessionId, billing)
+  },
+})
+
+export const attachBillingPlanToStream = internalMutation({
+  args: {
+    streamId: v.id("streams"),
+    billing: v.object({
+      spendingLimitMinutes: v.number(),
+      allowExtraUsageSpending: v.boolean(),
+      spendingLimitUsd: v.number(),
+      spendingLimitSwtdAmount: v.string(),
+      billingState: streamBillingStateValidator,
+      chargedMinutes: v.number(),
+      remainingApprovedMinutes: v.number(),
+      chargeBlockMinutes: v.number(),
+      nextChargeAt: v.optional(v.number()),
+      graceStartedAt: v.optional(v.number()),
+    }),
+  },
+  handler: async (ctx, { streamId, billing }) => {
+    await ctx.db.patch(streamId, billing)
   },
 })
 
@@ -109,8 +99,8 @@ export const markPrepaidChargeOnSession = internalMutation({
   },
   handler: async (ctx, { sessionId, signature, chargedAt }) => {
     await ctx.db.patch(sessionId, {
-      prepaidChargedAt: chargedAt,
-      prepaidChargeSignature: signature,
+      spendingApprovedAt: chargedAt,
+      spendingApprovalSignature: signature,
     })
   },
 })
@@ -124,12 +114,17 @@ export const applyTopUpToActiveSession = internalMutation({
     const session = await ctx.db.get(sessionId)
     if (!session) throw new Error("Session not found")
 
-    const nextRemainingPrepaidMinutes = (session.remainingPrepaidMinutes ?? 0) + purchasedMinutes
+    const nextRemainingApprovedMinutes = (session.remainingApprovedMinutes ?? 0) + purchasedMinutes
+    const nextSpendingLimitMinutes = (session.spendingLimitMinutes ?? 0) + purchasedMinutes
+    const nextSpendingLimitUsd = (nextSpendingLimitMinutes / 60) * STREAM_RATE_PER_HOUR_USD
     const patch = {
-      remainingPrepaidMinutes: nextRemainingPrepaidMinutes,
-      billingState: "prepaid" as const,
+      spendingLimitMinutes: nextSpendingLimitMinutes,
+      spendingLimitUsd: nextSpendingLimitUsd,
+      spendingLimitSwtdAmount: (nextSpendingLimitUsd / SWTD_USD_PRICE).toString(),
+      remainingApprovedMinutes: nextRemainingApprovedMinutes,
+      billingState: "active" as const,
       graceStartedAt: undefined as number | undefined,
-      nextOvertimeChargeAt: undefined as number | undefined,
+      nextChargeAt: undefined as number | undefined,
     }
 
     await ctx.db.patch(sessionId, patch)
@@ -140,60 +135,93 @@ export const applyTopUpToActiveSession = internalMutation({
   },
 })
 
+export const applyBillingHeartbeatState = internalMutation({
+  args: {
+    sessionId: v.id("studioSessions"),
+    lastHeartbeatAt: v.number(),
+    billing: v.object({
+      spendingLimitMinutes: v.number(),
+      allowExtraUsageSpending: v.boolean(),
+      spendingLimitUsd: v.number(),
+      spendingLimitSwtdAmount: v.string(),
+      billingState: streamBillingStateValidator,
+      chargedMinutes: v.number(),
+      remainingApprovedMinutes: v.number(),
+      chargeBlockMinutes: v.number(),
+      nextChargeAt: v.optional(v.number()),
+      graceStartedAt: v.optional(v.number()),
+    }),
+    exhausted: v.boolean(),
+  },
+  handler: async (ctx, { sessionId, lastHeartbeatAt, billing, exhausted }) => {
+    const session = await ctx.db.get(sessionId)
+    if (!session) throw new Error("Session not found")
+
+    await ctx.db.patch(sessionId, {
+      lastHeartbeatAt,
+      ...billing,
+    })
+
+    if (session.streamId) {
+      await ctx.db.patch(session.streamId, billing)
+      if (exhausted) {
+        await ctx.db.patch(session.streamId, {
+          status: "ended",
+          endedAt: lastHeartbeatAt,
+          viewerCount: 0,
+          billingState: "exhausted",
+        })
+      }
+    }
+  },
+})
+
 function applyBillingTick(
   state: {
-    allowExtraUsageSpending: boolean
-    remainingPrepaidMinutes: number
-    remainingOvertimeMinutes: number
-    billingState?: "prepaid" | "overtime" | "grace" | "exhausted" | "completed"
-    nextOvertimeChargeAt?: number
+    remainingApprovedMinutes: number
+    chargedMinutes: number
+    chargeBlockMinutes: number
+    billingState?: "active" | "grace" | "exhausted" | "completed"
+    nextChargeAt?: number
     graceStartedAt?: number
   },
-  elapsedMs: number,
   now: number,
 ) {
-  let remainingPrepaidMinutes = Math.max(0, state.remainingPrepaidMinutes)
-  let remainingOvertimeMinutes = Math.max(0, state.remainingOvertimeMinutes)
-  let billingState = state.billingState ?? "prepaid"
-  let nextOvertimeChargeAt = state.nextOvertimeChargeAt
+  let remainingApprovedMinutes = Math.max(0, state.remainingApprovedMinutes)
+  let chargedMinutes = Math.max(0, state.chargedMinutes)
+  let billingState = state.billingState ?? "active"
+  let nextChargeAt = state.nextChargeAt
   let graceStartedAt = state.graceStartedAt
 
-  const elapsedMinutes = elapsedMs / MILLISECONDS_PER_MINUTE
-
-  if (billingState === "prepaid") {
-    remainingPrepaidMinutes = Math.max(0, remainingPrepaidMinutes - elapsedMinutes)
-    if (remainingPrepaidMinutes <= 0) {
-      if (state.allowExtraUsageSpending && remainingOvertimeMinutes > 0) {
-        billingState = "overtime"
+  if (billingState === "active") {
+    if (!nextChargeAt) {
+      const blockMinutes = Math.min(state.chargeBlockMinutes, remainingApprovedMinutes)
+      if (blockMinutes > 0) {
+        remainingApprovedMinutes = Math.max(0, remainingApprovedMinutes - blockMinutes)
+        chargedMinutes += blockMinutes
+        nextChargeAt = now + state.chargeBlockMinutes * MILLISECONDS_PER_MINUTE
       } else {
         billingState = "grace"
         graceStartedAt ??= now
       }
     }
-  }
-
-  if (billingState === "overtime") {
-    if (!nextOvertimeChargeAt) {
-      const blockMinutes = Math.min(OVERTIME_BLOCK_MINUTES, remainingOvertimeMinutes)
-      remainingOvertimeMinutes = Math.max(0, remainingOvertimeMinutes - blockMinutes)
-      nextOvertimeChargeAt = now + OVERTIME_BLOCK_MINUTES * MILLISECONDS_PER_MINUTE
-    }
 
     while (
-      billingState === "overtime" &&
-      nextOvertimeChargeAt !== undefined &&
-      now >= nextOvertimeChargeAt
+      billingState === "active" &&
+      nextChargeAt !== undefined &&
+      now >= nextChargeAt
     ) {
-      if (remainingOvertimeMinutes <= 0) {
+      if (remainingApprovedMinutes <= 0) {
         billingState = "grace"
-        nextOvertimeChargeAt = undefined
+        nextChargeAt = undefined
         graceStartedAt ??= now
         break
       }
 
-      const blockMinutes = Math.min(OVERTIME_BLOCK_MINUTES, remainingOvertimeMinutes)
-      remainingOvertimeMinutes = Math.max(0, remainingOvertimeMinutes - blockMinutes)
-      nextOvertimeChargeAt += OVERTIME_BLOCK_MINUTES * MILLISECONDS_PER_MINUTE
+      const blockMinutes = Math.min(state.chargeBlockMinutes, remainingApprovedMinutes)
+      remainingApprovedMinutes = Math.max(0, remainingApprovedMinutes - blockMinutes)
+      chargedMinutes += blockMinutes
+      nextChargeAt += state.chargeBlockMinutes * MILLISECONDS_PER_MINUTE
     }
   }
 
@@ -206,9 +234,9 @@ function applyBillingTick(
 
   return {
     billingState,
-    remainingPrepaidMinutes,
-    remainingOvertimeMinutes,
-    nextOvertimeChargeAt,
+    chargedMinutes,
+    remainingApprovedMinutes,
+    nextChargeAt,
     graceStartedAt,
   }
 }
@@ -243,13 +271,11 @@ export const create = mutation({
     category: categoryValidator,
     sessionPlan: v.optional(streamSessionPlanValidator),
   },
-  handler: async (ctx, { title, category, sessionPlan }) => {
+  handler: async (ctx, { title, category, sessionPlan: _sessionPlan }) => {
     const userId = await getAuthenticatedUser(ctx)
 
     const user = await ctx.db.get(userId)
     if (!user?.username) throw new Error("Complete your profile before going live")
-
-    const billing = normalizeSessionPlan(sessionPlan)
 
     return ctx.db.insert("streams", {
       creatorId: userId,
@@ -259,7 +285,6 @@ export const create = mutation({
       status: "idle",
       viewerCount: 0,
       peakViewerCount: 0,
-      ...billing,
     })
   },
 })
@@ -321,56 +346,125 @@ export const setStatus = mutation({
 
 // ─── heartbeat ────────────────────────────────────────────────────────────────
 
-export const heartbeat = mutation({
+export const heartbeat = action({
   args: {},
   handler: async (ctx) => {
-    let userId
-    try {
-      userId = await getAuthenticatedUser(ctx)
-    } catch {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) {
       return
     }
-    const session = await ctx.db
-      .query("studioSessions")
-      .withIndex("by_creator_and_status", (q) => q.eq("creatorId", userId).eq("status", "active"))
-      .first()
-    if (!session) return
-    const now = Date.now()
-    const lastHeartbeatAt = session.lastHeartbeatAt ?? now
-    const elapsedMs = Math.max(0, now - lastHeartbeatAt)
 
-    const sessionBilling = applyBillingTick(
-      {
-        allowExtraUsageSpending: session.allowExtraUsageSpending ?? false,
-        remainingPrepaidMinutes: session.remainingPrepaidMinutes ?? (session.plannedMinutes ?? 60),
-        remainingOvertimeMinutes: session.remainingOvertimeMinutes ?? (session.overtimeMinutes ?? 0),
-        billingState: session.billingState,
-        nextOvertimeChargeAt: session.nextOvertimeChargeAt,
-        graceStartedAt: session.graceStartedAt,
-      },
-      elapsedMs,
-      now,
-    )
+    const userRecord = await ctx.runQuery(api.users.getCurrentUser, {})
+    if (!userRecord) return
 
-    await ctx.db.patch(session._id, {
-      lastHeartbeatAt: now,
-      ...sessionBilling,
+    const session = await ctx.runQuery(internal.streams.getActiveSessionForCreator, {
+      userId: userRecord._id,
     })
+    if (!session) return
 
-    if (session.streamId) {
-      const stream = await ctx.db.get(session.streamId)
-      if (stream && stream.status !== "ended") {
-        await ctx.db.patch(session.streamId, sessionBilling)
-        if (sessionBilling.billingState === "exhausted") {
-          await ctx.db.patch(session.streamId, {
-            status: "ended",
-            endedAt: now,
-            viewerCount: 0,
-            billingState: "exhausted",
-          })
-        }
+    const now = Date.now()
+    const stream = session.streamId ? await ctx.runQuery(api.streams.getActive, { userId: userRecord._id }) : null
+
+    if (!session.streamId || !stream || stream.status === "ended") {
+      await ctx.runMutation(internal.streams.attachBillingPlanToSession, {
+        sessionId: session._id,
+        billing: {
+          spendingLimitMinutes: session.spendingLimitMinutes ?? 0,
+          allowExtraUsageSpending: session.allowExtraUsageSpending ?? false,
+          spendingLimitUsd:
+            session.spendingLimitUsd ?? ((session.spendingLimitMinutes ?? 0) / 60) * STREAM_RATE_PER_HOUR_USD,
+          spendingLimitSwtdAmount:
+            session.spendingLimitSwtdAmount
+            ?? ((((session.spendingLimitMinutes ?? 0) / 60) * STREAM_RATE_PER_HOUR_USD) / SWTD_USD_PRICE).toString(),
+          billingState: session.billingState ?? "active",
+          chargedMinutes: session.chargedMinutes ?? 0,
+          remainingApprovedMinutes: session.remainingApprovedMinutes ?? (session.spendingLimitMinutes ?? 0),
+          chargeBlockMinutes: session.chargeBlockMinutes ?? CHARGE_BLOCK_MINUTES,
+          nextChargeAt: session.nextChargeAt,
+          graceStartedAt: session.graceStartedAt,
+        },
+      })
+      await ctx.runMutation(internal.streams.applyBillingHeartbeatState, {
+        sessionId: session._id,
+        lastHeartbeatAt: now,
+        billing: {
+          spendingLimitMinutes: session.spendingLimitMinutes ?? 0,
+          allowExtraUsageSpending: session.allowExtraUsageSpending ?? false,
+          spendingLimitUsd:
+            session.spendingLimitUsd ?? ((session.spendingLimitMinutes ?? 0) / 60) * STREAM_RATE_PER_HOUR_USD,
+          spendingLimitSwtdAmount:
+            session.spendingLimitSwtdAmount
+            ?? ((((session.spendingLimitMinutes ?? 0) / 60) * STREAM_RATE_PER_HOUR_USD) / SWTD_USD_PRICE).toString(),
+          billingState: session.billingState ?? "active",
+          chargedMinutes: session.chargedMinutes ?? 0,
+          remainingApprovedMinutes: session.remainingApprovedMinutes ?? (session.spendingLimitMinutes ?? 0),
+          chargeBlockMinutes: session.chargeBlockMinutes ?? CHARGE_BLOCK_MINUTES,
+          nextChargeAt: session.nextChargeAt,
+          graceStartedAt: session.graceStartedAt,
+        },
+        exhausted: false,
+      })
+      return
+    }
+
+    let billingState = session.billingState ?? "active"
+    let chargedMinutes = session.chargedMinutes ?? 0
+    let remainingApprovedMinutes = session.remainingApprovedMinutes ?? (session.spendingLimitMinutes ?? 0)
+    const chargeBlockMinutes = session.chargeBlockMinutes ?? CHARGE_BLOCK_MINUTES
+    let nextChargeAt: number | undefined = session.nextChargeAt ?? now
+    let graceStartedAt = session.graceStartedAt
+
+    while (billingState === "active" && now >= nextChargeAt) {
+      const blockMinutes = Math.min(chargeBlockMinutes, remainingApprovedMinutes)
+      if (blockMinutes <= 0) {
+        billingState = "grace"
+        nextChargeAt = undefined
+        graceStartedAt ??= now
+        break
+      }
+
+      await ctx.runAction(api.serverPlatformWallet.chargeApprovedStreamBlock, {
+        chargeMinutes: blockMinutes,
+      })
+
+      chargedMinutes += blockMinutes
+      remainingApprovedMinutes = Math.max(0, remainingApprovedMinutes - blockMinutes)
+      nextChargeAt += chargeBlockMinutes * MILLISECONDS_PER_MINUTE
+    }
+
+    if (billingState === "grace") {
+      graceStartedAt ??= now
+      if (now - graceStartedAt >= GRACE_PERIOD_MS) {
+        billingState = "exhausted"
       }
     }
+
+    const billingPatch = {
+      spendingLimitMinutes: session.spendingLimitMinutes ?? 0,
+      allowExtraUsageSpending: session.allowExtraUsageSpending ?? false,
+      spendingLimitUsd:
+        session.spendingLimitUsd ?? ((session.spendingLimitMinutes ?? 0) / 60) * STREAM_RATE_PER_HOUR_USD,
+      spendingLimitSwtdAmount:
+        session.spendingLimitSwtdAmount
+        ?? ((((session.spendingLimitMinutes ?? 0) / 60) * STREAM_RATE_PER_HOUR_USD) / SWTD_USD_PRICE).toString(),
+      billingState,
+      chargedMinutes,
+      remainingApprovedMinutes,
+      chargeBlockMinutes,
+      nextChargeAt,
+      graceStartedAt,
+    }
+
+    await ctx.runMutation(internal.streams.attachBillingPlanToSession, {
+      sessionId: session._id,
+      billing: billingPatch,
+    })
+    await ctx.runMutation(internal.streams.applyBillingHeartbeatState, {
+      sessionId: session._id,
+      lastHeartbeatAt: now,
+      billing: billingPatch,
+      exhausted: billingState === "exhausted",
+    })
   },
 })
 
@@ -439,19 +533,18 @@ export const getActiveBillingStatus = query({
     return {
       sessionId: session._id,
       streamId: session.streamId ?? null,
-      billingState: session.billingState ?? "prepaid",
-      plannedMinutes: session.plannedMinutes ?? 60,
+      billingState: session.billingState ?? "active",
+      spendingLimitMinutes: session.spendingLimitMinutes ?? 0,
       allowExtraUsageSpending: session.allowExtraUsageSpending ?? false,
-      overtimeMinutes: session.overtimeMinutes ?? 0,
-      remainingPrepaidMinutes: session.remainingPrepaidMinutes ?? (session.plannedMinutes ?? 60),
-      remainingOvertimeMinutes: session.remainingOvertimeMinutes ?? (session.overtimeMinutes ?? 0),
-      nextOvertimeChargeAt: session.nextOvertimeChargeAt ?? null,
+      chargedMinutes: session.chargedMinutes ?? 0,
+      remainingApprovedMinutes: session.remainingApprovedMinutes ?? (session.spendingLimitMinutes ?? 0),
+      chargeBlockMinutes: session.chargeBlockMinutes ?? CHARGE_BLOCK_MINUTES,
+      nextChargeAt: session.nextChargeAt ?? null,
       graceStartedAt: session.graceStartedAt ?? null,
-      prepaidUsd: session.prepaidUsd ?? STREAM_RATE_PER_HOUR_USD,
-      prepaidSwtdAmount:
-        session.prepaidSwtdAmount ?? (STREAM_RATE_PER_HOUR_USD / SWTD_USD_PRICE).toString(),
-      maxOvertimeUsd: session.maxOvertimeUsd ?? 0,
-      maxOvertimeSwtdAmount: session.maxOvertimeSwtdAmount ?? "0",
+      spendingLimitUsd: session.spendingLimitUsd ?? ((session.spendingLimitMinutes ?? 0) / 60) * STREAM_RATE_PER_HOUR_USD,
+      spendingLimitSwtdAmount:
+        session.spendingLimitSwtdAmount
+        ?? ((((session.spendingLimitMinutes ?? 0) / 60) * STREAM_RATE_PER_HOUR_USD) / SWTD_USD_PRICE).toString(),
       lastHeartbeatAt: session.lastHeartbeatAt ?? null,
     }
   },
@@ -511,7 +604,7 @@ export const goLive = action({
     category: categoryValidator,
     sessionPlan: v.optional(streamSessionPlanValidator),
   },
-  handler: async (ctx, { title, category, sessionPlan }): Promise<{ streamId: string }> => {
+  handler: async (ctx, { title, category, sessionPlan: _sessionPlan }): Promise<{ streamId: string }> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error("Not authenticated")
 
@@ -520,10 +613,26 @@ export const goLive = action({
     if (!userRecord) throw new Error("Complete your profile before going live")
     const userId = userRecord._id
 
-    const billing = normalizeSessionPlan(sessionPlan)
-
     const session = await ctx.runQuery(internal.streams.getActiveSessionForCreator, { userId })
     if (!session) throw new Error("No active studio session — open the studio first")
+    const billing = {
+      spendingLimitMinutes: session.spendingLimitMinutes ?? 0,
+      allowExtraUsageSpending: session.allowExtraUsageSpending ?? true,
+      spendingLimitUsd:
+        session.spendingLimitUsd ?? ((session.spendingLimitMinutes ?? 0) / 60) * STREAM_RATE_PER_HOUR_USD,
+      spendingLimitSwtdAmount:
+        session.spendingLimitSwtdAmount
+        ?? ((((session.spendingLimitMinutes ?? 0) / 60) * STREAM_RATE_PER_HOUR_USD) / SWTD_USD_PRICE).toString(),
+      billingState: "active" as const,
+      chargedMinutes: 0,
+      remainingApprovedMinutes: session.remainingApprovedMinutes ?? (session.spendingLimitMinutes ?? 0),
+      chargeBlockMinutes: session.chargeBlockMinutes ?? CHARGE_BLOCK_MINUTES,
+      nextChargeAt: Date.now(),
+      graceStartedAt: undefined as number | undefined,
+    }
+    if (billing.spendingLimitMinutes < CHARGE_BLOCK_MINUTES) {
+      throw new Error("Need at least 30 minutes worth of $SWTD to go live")
+    }
 
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID
     const apiToken = process.env.CLOUDFLARE_API_TOKEN
@@ -538,10 +647,14 @@ export const goLive = action({
     await ctx.runMutation(internal.streams.endStaleStreams, { userId })
 
     // Create the stream record and mark it as starting
-    const streamId = await ctx.runMutation(api.streams.create, { title, category, sessionPlan })
+    const streamId = await ctx.runMutation(api.streams.create, { title, category })
     await ctx.runMutation(api.streams.setStatus, { id: streamId, status: "starting" })
     await ctx.runMutation(internal.streams.attachBillingPlanToSession, {
       sessionId: session._id,
+      billing,
+    })
+    await ctx.runMutation(internal.streams.attachBillingPlanToStream, {
+      streamId,
       billing,
     })
 
@@ -681,17 +794,18 @@ export const endLivestream = action({
     await ctx.runMutation(internal.streams.attachBillingPlanToSession, {
       sessionId: session._id,
       billing: {
-        plannedMinutes: session.plannedMinutes ?? 60,
+        spendingLimitMinutes: session.spendingLimitMinutes ?? 0,
         allowExtraUsageSpending: session.allowExtraUsageSpending ?? false,
-        overtimeMinutes: session.overtimeMinutes ?? 0,
-        prepaidUsd: session.prepaidUsd ?? STREAM_RATE_PER_HOUR_USD,
-        prepaidSwtdAmount: session.prepaidSwtdAmount ?? (STREAM_RATE_PER_HOUR_USD / SWTD_USD_PRICE).toString(),
-        maxOvertimeUsd: session.maxOvertimeUsd ?? 0,
-        maxOvertimeSwtdAmount: session.maxOvertimeSwtdAmount ?? "0",
+        spendingLimitUsd:
+          session.spendingLimitUsd ?? ((session.spendingLimitMinutes ?? 0) / 60) * STREAM_RATE_PER_HOUR_USD,
+        spendingLimitSwtdAmount:
+          session.spendingLimitSwtdAmount
+          ?? ((((session.spendingLimitMinutes ?? 0) / 60) * STREAM_RATE_PER_HOUR_USD) / SWTD_USD_PRICE).toString(),
         billingState: "completed",
-        remainingPrepaidMinutes: session.remainingPrepaidMinutes ?? 0,
-        remainingOvertimeMinutes: session.remainingOvertimeMinutes ?? 0,
-        nextOvertimeChargeAt: undefined,
+        chargedMinutes: session.chargedMinutes ?? 0,
+        remainingApprovedMinutes: session.remainingApprovedMinutes ?? 0,
+        chargeBlockMinutes: session.chargeBlockMinutes ?? CHARGE_BLOCK_MINUTES,
+        nextChargeAt: undefined,
         graceStartedAt: undefined,
       },
     })

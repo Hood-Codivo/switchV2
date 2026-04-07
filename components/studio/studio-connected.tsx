@@ -63,6 +63,19 @@ function getGraceCountdown(graceStartedAt: number | null) {
   return Math.ceil(remainingMs / 1000);
 }
 
+function formatElapsedTime(startedAt: number | null | undefined) {
+  if (!startedAt) return "0m";
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - startedAt) / 60_000));
+  const hours = Math.floor(elapsedMinutes / 60);
+  const minutes = elapsedMinutes % 60;
+
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+
+  return `${minutes}m`;
+}
+
 function decodeBase64ToBytes(value: string) {
   return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
 }
@@ -564,42 +577,30 @@ export function StudioConnected({
     isHost ? {} : "skip",
   );
 
-  const prepaidRemaining = activeBillingStatus?.remainingPrepaidMinutes ?? 0;
-  const overtimeRemaining = activeBillingStatus?.remainingOvertimeMinutes ?? 0;
+  const approvedRemaining = activeBillingStatus?.remainingApprovedMinutes ?? 0;
   const graceCountdown = getGraceCountdown(
     activeBillingStatus?.graceStartedAt ?? null,
   );
   const billingState = activeBillingStatus?.billingState;
+  const elapsedTime = formatElapsedTime(activeStream?.startedAt ?? null);
 
   const warningMessage =
-    liveState === "live" && billingState === "prepaid" && prepaidRemaining <= 1
-      ? "Less than 1 minute of prepaid time remaining"
+    liveState === "live" && billingState === "active" && approvedRemaining <= 1
+      ? "Less than 1 minute of approved time remaining"
       : liveState === "live" &&
-          billingState === "prepaid" &&
-          prepaidRemaining <= 5
-        ? "5 minutes of prepaid time remaining"
+          billingState === "active" &&
+          approvedRemaining <= 5
+        ? "5 minutes of approved time remaining"
         : liveState === "live" &&
-            billingState === "prepaid" &&
-            prepaidRemaining <= 15
-          ? "15 minutes of prepaid time remaining"
-          : liveState === "live" &&
-              billingState === "overtime" &&
-              overtimeRemaining <= 1
-            ? "Less than 1 minute of overtime remaining"
-            : liveState === "live" &&
-                billingState === "overtime" &&
-                overtimeRemaining <= 5
-              ? "5 minutes of overtime remaining"
-              : liveState === "live" &&
-                  billingState === "overtime" &&
-                  overtimeRemaining <= 15
-                ? "15 minutes of overtime remaining"
+            billingState === "active" &&
+            approvedRemaining <= 15
+          ? "15 minutes of approved time remaining"
                 : null;
 
   const warningTone =
     billingState === "grace" || billingState === "exhausted"
       ? "border-red-500/30 bg-red-500/10 text-red-300"
-      : billingState === "overtime" || warningMessage
+      : warningMessage
         ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
         : "border-zinc-500/20 bg-zinc-800 text-white-200";
 
@@ -608,14 +609,11 @@ export function StudioConnected({
       ? `Top up within ${graceCountdown}s`
       : billingState === "exhausted"
         ? "Session exhausted"
-        : billingState === "overtime"
-          ? (warningMessage ?? "Streaming on overtime")
-          : (warningMessage ?? "Streaming on prepaid credit");
+          : (warningMessage ?? "Streaming on approved spend");
   const showTopUpButton =
     liveState === "live" &&
     (billingState === "grace" ||
-      billingState === "overtime" ||
-      (billingState === "prepaid" && prepaidRemaining <= 15));
+      (billingState === "active" && approvedRemaining <= 15));
   const topUpOptions: StreamSessionPlan["plannedMinutes"][] = [
     30, 60, 120, 180, 300,
   ];
@@ -687,11 +685,15 @@ export function StudioConnected({
                 {health !== null && <StreamHealthIndicator health={health} />}
                 {activeBillingStatus && (
                   <div className="flex items-center gap-2 text-[11px] text-zinc-400">
+                    <span>
+                      Elapsed:{" "}
+                      <span className="text-zinc-200">{elapsedTime}</span>
+                    </span>
                     <div className="relative flex items-center gap-2">
                       <span>
-                        Prepaid:{" "}
+                        Approved:{" "}
                         <span className="text-zinc-200">
-                          {formatRemainingMinutes(prepaidRemaining)}
+                          {formatRemainingMinutes(approvedRemaining)}
                         </span>
                       </span>
                       {showTopUpButton && (
@@ -734,14 +736,6 @@ export function StudioConnected({
                         </>
                       )}
                     </div>
-                    {activeBillingStatus.allowExtraUsageSpending && (
-                      <span>
-                        Overtime:{" "}
-                        <span className="text-zinc-200">
-                          {formatRemainingMinutes(overtimeRemaining)}
-                        </span>
-                      </span>
-                    )}
                     <span
                       className={cn(
                         "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium",

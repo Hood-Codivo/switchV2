@@ -1,79 +1,91 @@
-"use client"
+"use client";
 
-import { useState } from "react"
-import { Loader2 } from "lucide-react"
-import { CATEGORIES } from "@/convex/schema"
-import type { StreamCategory } from "@/convex/schema"
-import type {
-  StreamDurationOption,
-  StreamOvertimeOption,
-  StreamSessionPlan,
-} from "@/hooks/use-go-live"
-import { cn } from "@/lib/utils"
-
-const STREAM_RATE_PER_HOUR_USD = 0.5
-const SWTD_USD_PRICE = 0.00000536288
-const DURATION_OPTIONS: StreamDurationOption[] = [30, 60, 120, 180, 300]
-const OVERTIME_OPTIONS: StreamOvertimeOption[] = [0, 15, 30, 60]
+import { useState } from "react";
+import { useQuery } from "convex/react";
+import { ChevronDown, Loader2 } from "lucide-react";
+import { api } from "@/convex/_generated/api";
+import { CATEGORIES } from "@/convex/schema";
+import type { StreamCategory } from "@/convex/schema";
+import type { StreamSessionPlan } from "@/hooks/use-go-live";
+import { useWalletMintBalance } from "@/hooks/use-wallet-mint-balance";
+import { SWITCHED_TOKEN_MINT } from "@/lib/solana/tokens";
+import {
+  CHARGE_BLOCK_MINUTES,
+  getSwtdCoverage,
+  getSwtdFromUsd,
+  getUsdFromMinutes,
+} from "@/lib/stream-billing";
+import { cn } from "@/lib/utils";
 
 type GoLiveModalProps = {
-  open: boolean
-  onClose: () => void
+  open: boolean;
+  onClose: () => void;
   onConfirm: (
     title: string,
     category: StreamCategory,
     sessionPlan: StreamSessionPlan,
-  ) => Promise<void>
-  isStarting: boolean
-}
+  ) => Promise<void>;
+  isStarting: boolean;
+};
 
-export function GoLiveModal({ open, onClose, onConfirm, isStarting }: GoLiveModalProps) {
-  const [title, setTitle] = useState("")
-  const [category, setCategory] = useState<StreamCategory | null>(null)
-  const [plannedMinutes, setPlannedMinutes] = useState<StreamDurationOption>(60)
-  const [allowExtraUsageSpending, setAllowExtraUsageSpending] = useState(false)
-  const [overtimeMinutes, setOvertimeMinutes] = useState<StreamOvertimeOption>(30)
+export function GoLiveModal({
+  open,
+  onClose,
+  onConfirm,
+  isStarting,
+}: GoLiveModalProps) {
+  const [title, setTitle] = useState("");
+  const [category, setCategory] = useState<StreamCategory | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const currentUser = useQuery(api.users.getCurrentUser, {});
+  const swtdBalance = useWalletMintBalance(
+    currentUser?.walletAddress,
+    SWITCHED_TOKEN_MINT,
+  );
 
-  if (!open) return null
+  if (!open) return null;
 
-  const canSubmit = title.trim().length > 0 && category !== null && !isStarting
-  const prepaidCost = (plannedMinutes / 60) * STREAM_RATE_PER_HOUR_USD
-  const overtimeCost = allowExtraUsageSpending
-    ? (overtimeMinutes / 60) * STREAM_RATE_PER_HOUR_USD
-    : 0
-  const totalExposure = prepaidCost + overtimeCost
-  const totalExposureSwtd = totalExposure / SWTD_USD_PRICE
+  const coverage = getSwtdCoverage(Number(swtdBalance.balance ?? "0"));
+  const blockChargeUsd = getUsdFromMinutes(CHARGE_BLOCK_MINUTES);
+  const blockChargeSwtd = getSwtdFromUsd(blockChargeUsd);
+  const canSubmit =
+    title.trim().length > 0 &&
+    category !== null &&
+    !isStarting &&
+    !swtdBalance.loading &&
+    coverage.chargeableMinutes >= CHARGE_BLOCK_MINUTES;
 
   function formatUsd(value: number) {
-    return `$${value.toFixed(2)}`
+    return `$${value.toFixed(2)}`;
   }
 
   function formatToken(value: number) {
     return value.toLocaleString(undefined, {
       minimumFractionDigits: 0,
       maximumFractionDigits: 3,
-    })
+    });
   }
 
   function formatMinutes(value: number) {
-    if (value < 60) return `${value} min`
-    if (value % 60 === 0) return `${value / 60} hr`
-    return `${Math.floor(value / 60)} hr ${value % 60} min`
+    if (value <= 0) return "0 min";
+    if (value < 60) return `${value} min`;
+    if (value % 60 === 0) return `${value / 60} hr`;
+    return `${Math.floor(value / 60)} hr ${value % 60} min`;
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter" && canSubmit) {
-      void handleConfirm()
+      void handleConfirm();
     }
   }
 
   async function handleConfirm() {
-    if (!canSubmit || category === null) return
+    if (!canSubmit || category === null) return;
     await onConfirm(title.trim(), category, {
-      plannedMinutes,
-      allowExtraUsageSpending,
-      overtimeMinutes: allowExtraUsageSpending ? overtimeMinutes : 0,
-    })
+      plannedMinutes: 60,
+      allowExtraUsageSpending: true,
+      overtimeMinutes: 0,
+    });
   }
 
   return (
@@ -125,127 +137,87 @@ export function GoLiveModal({ open, onClose, onConfirm, isStarting }: GoLiveModa
           </div>
         </div>
 
-        <div className="mb-4">
-          <label className="mb-1.5 block text-xs font-medium text-zinc-400">
-            Planned stream time
-          </label>
-          <div className="grid grid-cols-5 gap-2">
-            {DURATION_OPTIONS.map((duration) => (
-              <button
-                key={duration}
-                type="button"
-                disabled={isStarting}
-                onClick={() => setPlannedMinutes(duration)}
-                className={cn(
-                  "rounded-lg px-2 py-2 text-xs font-medium transition-colors",
-                  plannedMinutes === duration
-                    ? "bg-red-600 text-white"
-                    : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200",
-                  isStarting && "cursor-not-allowed opacity-50",
-                )}
-              >
-                {formatMinutes(duration)}
-              </button>
-            ))}
-          </div>
-        </div>
-
         <div className="mb-4 rounded-xl border border-zinc-800 bg-zinc-950/80 p-4">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
             <div>
               <p className="text-xs font-medium text-zinc-300">
-                Allow extra usage spending
+                Streaming allowance approval
               </p>
               <p className="mt-1 text-xs text-zinc-500">
-                Keep streaming past your prepaid time using a capped overtime buffer.
+                You approve your full available $SWTD balance. The platform then
+                charges at the start of every{" "}
+                {formatMinutes(CHARGE_BLOCK_MINUTES)} block while your stream is
+                live.
               </p>
             </div>
-            <button
-              type="button"
-              disabled={isStarting}
-              onClick={() => setAllowExtraUsageSpending((current) => !current)}
-              className={cn(
-                "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors",
-                allowExtraUsageSpending ? "bg-red-600" : "bg-zinc-700",
-                isStarting && "cursor-not-allowed opacity-50",
-              )}
-              aria-pressed={allowExtraUsageSpending}
-            >
-              <span
-                className={cn(
-                  "inline-block size-4 rounded-full bg-white transition-transform",
-                  allowExtraUsageSpending ? "translate-x-6" : "translate-x-1",
-                )}
-              />
-            </button>
           </div>
-
-          {allowExtraUsageSpending && (
-            <div className="mt-4">
-              <label className="mb-1.5 block text-xs font-medium text-zinc-400">
-                Overtime cap
-              </label>
-              <div className="grid grid-cols-4 gap-2">
-                {OVERTIME_OPTIONS.filter((option) => option > 0).map((option) => (
-                  <button
-                    key={option}
-                    type="button"
-                    disabled={isStarting}
-                    onClick={() => setOvertimeMinutes(option)}
-                    className={cn(
-                      "rounded-lg px-2 py-2 text-xs font-medium transition-colors",
-                      overtimeMinutes === option
-                        ? "bg-red-600 text-white"
-                        : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200",
-                      isStarting && "cursor-not-allowed opacity-50",
-                    )}
-                  >
-                    {formatMinutes(option)}
-                  </button>
-                ))}
-              </div>
-              <p className="mt-2 text-[11px] text-zinc-500">
-                Overtime is charged at the beginning of every 30-minute block while your stream is still live.
-              </p>
-            </div>
-          )}
         </div>
 
-        <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-950/80 p-4">
-          <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">
-            Session Summary
-          </p>
-          <div className="mt-3 space-y-2 text-sm">
-            <div className="flex items-center justify-between text-zinc-300">
-              <span>Prepaid time</span>
-              <span>{formatMinutes(plannedMinutes)}</span>
+        <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-950/80">
+          <button
+            type="button"
+            onClick={() => setSummaryOpen((open) => !open)}
+            className="flex w-full items-center justify-between px-4 py-3 text-left"
+          >
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">
+                Session Summary
+              </p>
+              <p className="mt-1 text-xs text-zinc-400">
+                {swtdBalance.loading
+                  ? "Loading balance…"
+                  : `${formatMinutes(coverage.chargeableMinutes)} available`}
+              </p>
             </div>
-            <div className="flex items-center justify-between text-zinc-300">
-              <span>Prepaid cost</span>
-              <span>{formatUsd(prepaidCost)}</span>
+            <ChevronDown
+              className={cn(
+                "size-4 text-zinc-500 transition-transform",
+                summaryOpen && "rotate-180",
+              )}
+            />
+          </button>
+          {summaryOpen && (
+            <div className="border-t border-zinc-800 px-4 pb-4 pt-3">
+              <div className="space-y-2 text-sm">
+                <div className="flex items-center justify-between text-zinc-300">
+                  <span>Current $SWTD balance</span>
+                  <span>
+                    {swtdBalance.loading
+                      ? "Loading…"
+                      : `${formatToken(coverage.swtdBalance)} $SWTD`}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-zinc-300">
+                  <span>Chargeable time</span>
+                  <span>{formatMinutes(coverage.chargeableMinutes)}</span>
+                </div>
+                <div className="flex items-center justify-between text-zinc-300">
+                  <span>Per-block charge</span>
+                  <span>
+                    {formatUsd(blockChargeUsd)}{" "}
+                    <span className="text-zinc-500">
+                      ({formatToken(blockChargeSwtd)} $SWTD)
+                    </span>
+                  </span>
+                </div>
+                <div className="mt-3 flex items-center justify-between border-t border-zinc-800 pt-3 font-medium text-white">
+                  <span>Approval limit</span>
+                  <span>
+                    {formatUsd(coverage.approvalUsd)}{" "}
+                    <span className="text-zinc-400">
+                      ({formatToken(coverage.swtdBalance)} $SWTD)
+                    </span>
+                  </span>
+                </div>
+              </div>
             </div>
-            <div className="flex items-center justify-between text-zinc-300">
-              <span>Overtime</span>
-              <span>
-                {allowExtraUsageSpending
-                  ? `${formatMinutes(overtimeMinutes)} max`
-                  : "Off"}
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-zinc-300">
-              <span>Max overtime spend</span>
-              <span>{allowExtraUsageSpending ? formatUsd(overtimeCost) : "$0.00"}</span>
-            </div>
-            <div className="mt-3 border-t border-zinc-800 pt-3 flex items-center justify-between font-medium text-white">
-              <span>Total possible spend</span>
-              <span>
-                {formatUsd(totalExposure)}{" "}
-                <span className="text-zinc-400">
-                  ({formatToken(totalExposureSwtd)} $SWTD)
-                </span>
-              </span>
-            </div>
-          </div>
+          )}
+          {coverage.chargeableMinutes < CHARGE_BLOCK_MINUTES &&
+            !swtdBalance.loading && (
+              <p className="px-4 pb-4 text-xs text-amber-300">
+                You need at least 30 minutes worth of $SWTD to start streaming.
+              </p>
+            )}
         </div>
 
         {/* Actions */}
@@ -276,5 +248,5 @@ export function GoLiveModal({ open, onClose, onConfirm, isStarting }: GoLiveModa
         </div>
       </div>
     </div>
-  )
+  );
 }

@@ -326,7 +326,7 @@ describe("streams.heartbeat", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
     const sessionId = await t.run(async (ctx) => seedSession(ctx, userId))
 
-    await t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.streams.heartbeat, {})
+    await t.withIdentity({ subject: "did:privy:test-alice" }).action(api.streams.heartbeat, {})
 
     const session = await t.run(async (ctx) => ctx.db.get(sessionId))
     expect(session?.lastHeartbeatAt).toBeGreaterThan(0)
@@ -337,7 +337,7 @@ describe("streams.heartbeat", () => {
     const userId = await t.run(async (ctx) => seedUser(ctx, "alice"))
 
     await expect(
-      t.withIdentity({ subject: "did:privy:test-alice" }).mutation(api.streams.heartbeat, {}),
+      t.withIdentity({ subject: "did:privy:test-alice" }).action(api.streams.heartbeat, {}),
     ).resolves.not.toThrow()
   })
 })

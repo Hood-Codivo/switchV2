@@ -5,48 +5,29 @@ import { action } from "./_generated/server"
 import { api, internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import {
+  chargeApprovedSwtdBlockTransaction,
   prepareBuySwtdMeteoraSwapTransaction,
   prepareBuySwtdSwapTransaction,
-  preparePrepaidSwtdChargeTransaction,
+  prepareDirectSwtdChargeTransaction,
+  prepareStreamSpendingApprovalTransaction,
   preparePlatformWalletCreationTransaction,
   prepareWithdrawalTransaction,
   quoteBuySwtdTransaction,
   submitBuySwtdSwapTransaction,
-  submitPrepaidSwtdChargeTransaction,
+  submitStreamSpendingApprovalTransaction,
   submitPlatformWalletCreationTransaction,
   submitWithdrawalTransaction,
 } from "../lib/solana/server-platform-wallet"
 import type { WithdrawToken } from "../lib/solana/tokens"
-
-const STREAM_RATE_PER_HOUR_USD = 0.5
-const SWTD_USD_PRICE = 0.00000536288
+import { getSwtdCoverage } from "../lib/stream-billing"
+import { fetchWalletMintBalance } from "../lib/solana/platform-wallet"
+import { SWITCHED_TOKEN_MINT } from "../lib/solana/tokens"
 
 const streamSessionPlanValidator = v.object({
   plannedMinutes: v.number(),
   allowExtraUsageSpending: v.boolean(),
   overtimeMinutes: v.number(),
 })
-
-function normalizeSessionPlan(
-  sessionPlan?: {
-    plannedMinutes: number
-    allowExtraUsageSpending: boolean
-    overtimeMinutes: number
-  } | null,
-) {
-  const plannedMinutes = sessionPlan?.plannedMinutes ?? 60
-  const allowExtraUsageSpending = sessionPlan?.allowExtraUsageSpending ?? false
-  const overtimeMinutes = allowExtraUsageSpending ? (sessionPlan?.overtimeMinutes ?? 30) : 0
-  const prepaidUsd = (plannedMinutes / 60) * STREAM_RATE_PER_HOUR_USD
-
-  return {
-    plannedMinutes,
-    allowExtraUsageSpending,
-    overtimeMinutes,
-    prepaidUsd,
-    prepaidSwtdAmount: (prepaidUsd / SWTD_USD_PRICE).toString(),
-  }
-}
 
 export const prepareEnsurePlatformWallet = action({
   args: {},
@@ -72,8 +53,8 @@ export const preparePrepaidSwtdCharge = action({
   },
   handler: async (
     ctx,
-    { sessionPlan },
-  ): Promise<Awaited<ReturnType<typeof preparePrepaidSwtdChargeTransaction>>> => {
+    { sessionPlan: _sessionPlan },
+  ): Promise<Awaited<ReturnType<typeof prepareDirectSwtdChargeTransaction>>> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error("Not authenticated")
 
@@ -86,23 +67,53 @@ export const preparePrepaidSwtdCharge = action({
     const activeSession = await ctx.runQuery(internal.streams.getActiveSessionForCreator, {
       userId: userRecord._id,
     })
-    if (activeSession?.prepaidChargedAt) {
-      const billing = normalizeSessionPlan(sessionPlan)
+    if (activeSession?.spendingApprovedAt) {
+      const swtdBalance = await fetchWalletMintBalance(
+        userRecord.walletAddress,
+        SWITCHED_TOKEN_MINT,
+      )
+      const coverage = getSwtdCoverage(Number(swtdBalance.uiAmountString ?? "0"))
+      await ctx.runMutation(internal.streams.attachBillingPlanToSession, {
+        sessionId: activeSession._id,
+        billing: {
+          spendingLimitMinutes: coverage.chargeableMinutes,
+          allowExtraUsageSpending: true,
+          spendingLimitUsd: coverage.approvalUsd,
+          spendingLimitSwtdAmount: coverage.swtdBalance.toString(),
+          billingState: "active",
+          chargedMinutes: activeSession.chargedMinutes ?? 0,
+          remainingApprovedMinutes: coverage.chargeableMinutes,
+          chargeBlockMinutes: coverage.blockMinutes,
+          nextChargeAt: undefined,
+          graceStartedAt: undefined,
+        },
+      })
       return {
         tokenMint: "mLpmTV7yBWUysSw9pQaqRqfhwcaYizSPVfPaRGycyai",
         senderWalletAddress: userRecord.walletAddress,
         destinationWalletAddress: userRecord.walletAddress,
         destinationAta: userRecord.walletAddress,
-        amount: Number(billing.prepaidSwtdAmount),
+        amount: coverage.swtdBalance,
         transactionBase64: "",
-      } as Awaited<ReturnType<typeof preparePrepaidSwtdChargeTransaction>>
+      } as Awaited<ReturnType<typeof prepareStreamSpendingApprovalTransaction>>
     }
 
-    const billing = normalizeSessionPlan(sessionPlan)
-    return preparePrepaidSwtdChargeTransaction(
+    const swtdBalance = await fetchWalletMintBalance(
       userRecord.walletAddress,
-      billing.prepaidSwtdAmount,
-      "streams:prepaid",
+      SWITCHED_TOKEN_MINT,
+    )
+    const coverage = getSwtdCoverage(Number(swtdBalance.uiAmountString ?? "0"))
+    if (coverage.swtdBalance <= 0) {
+      throw new Error("Insufficient $SWTD balance")
+    }
+    if (coverage.chargeableMinutes < coverage.blockMinutes) {
+      throw new Error("Need at least 30 minutes worth of $SWTD to go live")
+    }
+
+    return prepareStreamSpendingApprovalTransaction(
+      userRecord.walletAddress,
+      coverage.swtdBalance.toString(),
+      "streams:approval",
     )
   },
 })
@@ -114,7 +125,7 @@ export const submitPrepaidSwtdCharge = action({
   handler: async (
     ctx,
     { signedTransactionBase64 },
-  ): Promise<Awaited<ReturnType<typeof submitPrepaidSwtdChargeTransaction>>> => {
+  ): Promise<Awaited<ReturnType<typeof submitStreamSpendingApprovalTransaction>>> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error("Not authenticated")
 
@@ -124,24 +135,65 @@ export const submitPrepaidSwtdCharge = action({
     } | null
     if (!userRecord?.walletAddress) throw new Error("Wallet setup incomplete")
 
-    const result = await submitPrepaidSwtdChargeTransaction(
+    const result = await submitStreamSpendingApprovalTransaction(
       userRecord.walletAddress,
       signedTransactionBase64,
-      "streams:prepaid",
+      "streams:approval",
     )
 
     const activeSession = await ctx.runQuery(internal.streams.getActiveSessionForCreator, {
       userId: userRecord._id,
     })
     if (activeSession) {
+      const swtdBalance = await fetchWalletMintBalance(
+        userRecord.walletAddress,
+        SWITCHED_TOKEN_MINT,
+      )
+      const coverage = getSwtdCoverage(Number(swtdBalance.uiAmountString ?? "0"))
       await ctx.runMutation(internal.streams.markPrepaidChargeOnSession, {
         sessionId: activeSession._id,
         signature: result.signature,
         chargedAt: Date.now(),
       })
+      await ctx.runMutation(internal.streams.attachBillingPlanToSession, {
+        sessionId: activeSession._id,
+        billing: {
+          spendingLimitMinutes: coverage.chargeableMinutes,
+          allowExtraUsageSpending: true,
+          spendingLimitUsd: coverage.approvalUsd,
+          spendingLimitSwtdAmount: coverage.swtdBalance.toString(),
+          billingState: "active",
+          chargedMinutes: 0,
+          remainingApprovedMinutes: coverage.chargeableMinutes,
+          chargeBlockMinutes: coverage.blockMinutes,
+          nextChargeAt: undefined,
+          graceStartedAt: undefined,
+        },
+      })
     }
 
     return result
+  },
+})
+
+export const chargeApprovedStreamBlock = action({
+  args: {
+    chargeMinutes: v.number(),
+  },
+  handler: async (ctx, { chargeMinutes }) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error("Not authenticated")
+
+    const userRecord = await ctx.runQuery(api.users.getCurrentUser, {}) as {
+      walletAddress?: string
+    } | null
+    if (!userRecord?.walletAddress) throw new Error("Wallet setup incomplete")
+
+    return chargeApprovedSwtdBlockTransaction(
+      userRecord.walletAddress,
+      chargeMinutes,
+      "streams:billing",
+    )
   },
 })
 
@@ -152,7 +204,7 @@ export const prepareStreamTopUpCharge = action({
   handler: async (
     ctx,
     { purchasedMinutes },
-  ): Promise<Awaited<ReturnType<typeof preparePrepaidSwtdChargeTransaction>>> => {
+  ): Promise<Awaited<ReturnType<typeof prepareStreamSpendingApprovalTransaction>>> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error("Not authenticated")
 
@@ -164,10 +216,12 @@ export const prepareStreamTopUpCharge = action({
       throw new Error("Invalid top up duration")
     }
 
-    const prepaidUsd = (purchasedMinutes / 60) * STREAM_RATE_PER_HOUR_USD
-    const prepaidSwtdAmount = (prepaidUsd / SWTD_USD_PRICE).toString()
+    const prepaidSwtdAmount = (
+      ((purchasedMinutes / 60) * 0.5) /
+      0.00000536288
+    ).toString()
 
-    return preparePrepaidSwtdChargeTransaction(
+    return prepareDirectSwtdChargeTransaction(
       userRecord.walletAddress,
       prepaidSwtdAmount,
       "streams:topup",
@@ -183,7 +237,7 @@ export const submitStreamTopUpCharge = action({
   handler: async (
     ctx,
     { signedTransactionBase64, purchasedMinutes },
-  ): Promise<Awaited<ReturnType<typeof submitPrepaidSwtdChargeTransaction>>> => {
+  ): Promise<Awaited<ReturnType<typeof submitStreamSpendingApprovalTransaction>>> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error("Not authenticated")
 
@@ -196,7 +250,7 @@ export const submitStreamTopUpCharge = action({
       throw new Error("Invalid top up duration")
     }
 
-    const result = await submitPrepaidSwtdChargeTransaction(
+    const result = await submitStreamSpendingApprovalTransaction(
       userRecord.walletAddress,
       signedTransactionBase64,
       "streams:topup",
