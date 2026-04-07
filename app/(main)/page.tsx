@@ -1,5 +1,5 @@
-import { DiscoveryFeed } from "@/components/discovery-feed"
+import { HomeHero } from "@/components/home-hero"
 
 export default function HomePage() {
-  return <DiscoveryFeed />
+  return <HomeHero />
 }
