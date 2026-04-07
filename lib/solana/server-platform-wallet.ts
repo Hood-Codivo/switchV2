@@ -89,6 +89,10 @@ function getBroadcasterWeb3Keypair() {
   return Web3Keypair.fromSecretKey(privateKey)
 }
 
+function getSwtdTreasuryWalletAddress() {
+  return process.env.SWTD_TREASURY_WALLET_ADDRESS ?? process.env.SOLANA_BROADCASTER_WALLET_ADDRESS
+}
+
 function encodeU64LE(value: bigint) {
   const bytes = new Uint8Array(8)
   new DataView(bytes.buffer).setBigUint64(0, value, true)
@@ -574,6 +578,136 @@ export async function submitWithdrawalTransaction(
   const signature = getSignatureFromTransaction(signedTransaction)
 
   console.log(`[${logScope}] withdraw sent`, {
+    senderWalletAddress,
+    signature,
+  })
+
+  return {
+    senderWalletAddress,
+    signature,
+  }
+}
+
+export async function preparePrepaidSwtdChargeTransaction(
+  senderWalletAddress: string,
+  prepaidSwtdAmount: string,
+  logScope = "streams:prepaid",
+) {
+  ensureRuntimePrimitives(logScope)
+
+  const amount = Number(prepaidSwtdAmount)
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Invalid prepaid SWTD amount")
+  }
+
+  const config = getPlatformWalletConfig()
+  const rpc = createSolanaRpc(config.rpcUrl as Parameters<typeof createSolanaRpc>[0])
+  const broadcasterSigner = await getBroadcasterSigner()
+  const treasuryWalletAddress = getSwtdTreasuryWalletAddress() ?? broadcasterSigner.address
+  const normalizedTreasuryWalletAddress = address(treasuryWalletAddress)
+  const { value: latestBlockhash } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send()
+
+  const sourceBalance = await fetchWalletMintBalance(senderWalletAddress, SWITCHED_TOKEN_MINT)
+  const switchedTokenProgramAddress = await fetchMintProgramAddress(SWITCHED_TOKEN_MINT)
+  const mintSupply = await rpc
+    .getTokenSupply(address(SWITCHED_TOKEN_MINT), { commitment: "confirmed" })
+    .send()
+  const decimals = mintSupply.value.decimals
+  const amountBaseUnits = BigInt(Math.round(amount * 10 ** decimals))
+  if (BigInt(sourceBalance.amount) < amountBaseUnits) {
+    throw new Error("Insufficient $SWTD balance")
+  }
+
+  const treasuryAta = await deriveAssociatedTokenAddress(
+    treasuryWalletAddress,
+    SWITCHED_TOKEN_MINT,
+    switchedTokenProgramAddress,
+  )
+  const treasuryAccount = await fetchEncodedAccount(rpc, address(treasuryAta))
+
+  console.log(`[${logScope}] preparing prepaid swtd charge tx`, {
+    senderWalletAddress,
+    broadcasterWalletAddress: broadcasterSigner.address,
+    treasuryWalletAddress: normalizedTreasuryWalletAddress,
+    sourceAta: sourceBalance.ataAddress,
+    treasuryAta,
+    amount,
+    amountBaseUnits: amountBaseUnits.toString(),
+    decimals,
+    tokenProgramAddress: switchedTokenProgramAddress,
+    treasuryAtaExists: treasuryAccount.exists,
+  })
+
+  const transferInstruction = {
+    programAddress: switchedTokenProgramAddress,
+    accounts: [
+      { address: address(sourceBalance.ataAddress), role: AccountRole.WRITABLE },
+      { address: address(SWITCHED_TOKEN_MINT), role: AccountRole.READONLY },
+      { address: address(treasuryAta), role: AccountRole.WRITABLE },
+      { address: address(senderWalletAddress), role: AccountRole.WRITABLE_SIGNER },
+    ],
+    data: encodeTransferCheckedParams(amountBaseUnits, decimals),
+  }
+
+  const transactionMessage = appendTransactionMessageInstruction(
+    transferInstruction,
+    !treasuryAccount.exists
+      ? appendTransactionMessageInstruction(
+          buildCreateAssociatedTokenAccountInstruction(
+            broadcasterSigner.address,
+            treasuryAta,
+            treasuryWalletAddress,
+            SWITCHED_TOKEN_MINT,
+            switchedTokenProgramAddress,
+          ),
+          setTransactionMessageLifetimeUsingBlockhash(
+            latestBlockhash,
+            setTransactionMessageFeePayerSigner(
+              broadcasterSigner,
+              createTransactionMessage({ version: 0 }),
+            ),
+          ),
+        )
+      : setTransactionMessageLifetimeUsingBlockhash(
+          latestBlockhash,
+          setTransactionMessageFeePayerSigner(
+            broadcasterSigner,
+            createTransactionMessage({ version: 0 }),
+          ),
+        ),
+  )
+
+  const unsignedTransaction = await partiallySignTransactionMessageWithSigners(transactionMessage)
+  const wireTransactionBytes = getTransactionEncoder().encode(unsignedTransaction)
+
+  return {
+    tokenMint: SWITCHED_TOKEN_MINT,
+    senderWalletAddress,
+    destinationWalletAddress: normalizedTreasuryWalletAddress,
+    destinationAta: treasuryAta,
+    amount,
+    transactionBase64: Buffer.from(wireTransactionBytes).toString("base64"),
+  }
+}
+
+export async function submitPrepaidSwtdChargeTransaction(
+  senderWalletAddress: string,
+  signedTransactionBase64: string,
+  logScope = "streams:prepaid",
+) {
+  const signedTransactionBytes = Buffer.from(signedTransactionBase64, "base64")
+  const signedTransaction = getTransactionDecoder().decode(signedTransactionBytes)
+  assertIsFullySignedTransaction(signedTransaction)
+  assertIsTransactionWithinSizeLimit(signedTransaction)
+
+  const config = getPlatformWalletConfig()
+  const rpc = createSolanaRpc(config.rpcUrl as Parameters<typeof createSolanaRpc>[0])
+  const sendTransactionWithoutConfirming = sendTransactionWithoutConfirmingFactory({ rpc })
+
+  await sendTransactionWithoutConfirming(signedTransaction, { commitment: "confirmed" })
+  const signature = getSignatureFromTransaction(signedTransaction)
+
+  console.log(`[${logScope}] prepaid swtd charge sent`, {
     senderWalletAddress,
     signature,
   })

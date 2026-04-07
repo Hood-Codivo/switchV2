@@ -32,6 +32,14 @@ export const streamStatusValidator = v.union(
   v.literal("ended"),
 )
 
+export const streamBillingStateValidator = v.union(
+  v.literal("prepaid"),
+  v.literal("overtime"),
+  v.literal("grace"),
+  v.literal("exhausted"),
+  v.literal("completed"),
+)
+
 // "ending" is intentionally absent — it exists only as local UI state in
 // use-go-live.ts (GoLiveState) and is never persisted to Convex.
 export type StreamStatus = "idle" | "starting" | "live" | "ended"
@@ -52,6 +60,20 @@ export default defineSchema({
     tipTotal: v.optional(v.number()),           // running total of tips received this stream
     slowModeInterval: v.optional(v.number()), // seconds between messages, 0 or absent = off
     chatClearedAt: v.optional(v.number()),    // timestamp; messages before this are hidden
+    plannedMinutes: v.optional(v.number()),
+    allowExtraUsageSpending: v.optional(v.boolean()),
+    overtimeMinutes: v.optional(v.number()),
+    prepaidUsd: v.optional(v.number()),
+    prepaidSwtdAmount: v.optional(v.string()),
+    maxOvertimeUsd: v.optional(v.number()),
+    maxOvertimeSwtdAmount: v.optional(v.string()),
+    billingState: v.optional(streamBillingStateValidator),
+    remainingPrepaidMinutes: v.optional(v.number()),
+    remainingOvertimeMinutes: v.optional(v.number()),
+    nextOvertimeChargeAt: v.optional(v.number()),
+    graceStartedAt: v.optional(v.number()),
+    prepaidChargedAt: v.optional(v.number()),
+    prepaidChargeSignature: v.optional(v.string()),
   })
     .index("by_status", ["status"])
     .index("by_creator", ["creatorId"])
@@ -86,6 +108,20 @@ export default defineSchema({
     stageParticipantIds: v.optional(v.array(v.string())), // "${customParticipantId}:camera" or "${customParticipantId}:screen" per slot
     stageLayoutId: v.optional(v.string()),
     lastHeartbeatAt: v.optional(v.number()),
+    plannedMinutes: v.optional(v.number()),
+    allowExtraUsageSpending: v.optional(v.boolean()),
+    overtimeMinutes: v.optional(v.number()),
+    prepaidUsd: v.optional(v.number()),
+    prepaidSwtdAmount: v.optional(v.string()),
+    maxOvertimeUsd: v.optional(v.number()),
+    maxOvertimeSwtdAmount: v.optional(v.string()),
+    billingState: v.optional(streamBillingStateValidator),
+    remainingPrepaidMinutes: v.optional(v.number()),
+    remainingOvertimeMinutes: v.optional(v.number()),
+    nextOvertimeChargeAt: v.optional(v.number()),
+    graceStartedAt: v.optional(v.number()),
+    prepaidChargedAt: v.optional(v.number()),
+    prepaidChargeSignature: v.optional(v.string()),
   })
     .index("by_creator", ["creatorId"])
     .index("by_creator_and_status", ["creatorId", "status"])
