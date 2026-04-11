@@ -49,6 +49,7 @@ const SWTD_METEORA_POOL = "Eye2RgcRZFub83Mfvfe3NnAK9MSAZx2iBsDJN3BDy7Q8"
 const DEFAULT_SWAP_SLIPPAGE_BPS = 300
 const MIN_SWAP_INPUT_BASE_UNITS = BigInt(1_000_000)
 const TRANSFER_CHECKED_DISCRIMINATOR = 12
+const APPROVE_CHECKED_DISCRIMINATOR = 13
 
 function ensureRuntimePrimitives(logScope: string) {
   if (typeof globalThis.queueMicrotask !== "function") {
@@ -89,6 +90,10 @@ function getBroadcasterWeb3Keypair() {
   return Web3Keypair.fromSecretKey(privateKey)
 }
 
+function getSwtdTreasuryWalletAddress() {
+  return process.env.SWTD_TREASURY_WALLET_ADDRESS ?? process.env.SOLANA_BROADCASTER_WALLET_ADDRESS
+}
+
 function encodeU64LE(value: bigint) {
   const bytes = new Uint8Array(8)
   new DataView(bytes.buffer).setBigUint64(0, value, true)
@@ -106,6 +111,14 @@ function encodeWithdrawParams(amountBaseUnits: bigint, gasInUsdcBaseUnits: bigin
 function encodeTransferCheckedParams(amountBaseUnits: bigint, decimals: number) {
   return new Uint8Array([
     TRANSFER_CHECKED_DISCRIMINATOR,
+    ...encodeU64LE(amountBaseUnits),
+    decimals,
+  ])
+}
+
+function encodeApproveCheckedParams(amountBaseUnits: bigint, decimals: number) {
+  return new Uint8Array([
+    APPROVE_CHECKED_DISCRIMINATOR,
     ...encodeU64LE(amountBaseUnits),
     decimals,
   ])
@@ -581,6 +594,313 @@ export async function submitWithdrawalTransaction(
   return {
     senderWalletAddress,
     signature,
+  }
+}
+
+export async function prepareStreamSpendingApprovalTransaction(
+  senderWalletAddress: string,
+  spendingLimitSwtdAmount: string,
+  logScope = "streams:approval",
+) {
+  ensureRuntimePrimitives(logScope)
+
+  const amount = Number(spendingLimitSwtdAmount)
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Invalid stream spending approval amount")
+  }
+
+  const config = getPlatformWalletConfig()
+  const rpc = createSolanaRpc(config.rpcUrl as Parameters<typeof createSolanaRpc>[0])
+  const broadcasterSigner = await getBroadcasterSigner()
+  const { value: latestBlockhash } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send()
+
+  const sourceBalance = await fetchWalletMintBalance(senderWalletAddress, SWITCHED_TOKEN_MINT)
+  const switchedTokenProgramAddress = await fetchMintProgramAddress(SWITCHED_TOKEN_MINT)
+  const mintSupply = await rpc
+    .getTokenSupply(address(SWITCHED_TOKEN_MINT), { commitment: "confirmed" })
+    .send()
+  const decimals = mintSupply.value.decimals
+  const amountBaseUnits = BigInt(Math.round(amount * 10 ** decimals))
+  if (BigInt(sourceBalance.amount) < amountBaseUnits) {
+    throw new Error("Insufficient $SWTD balance")
+  }
+
+  console.log(`[${logScope}] preparing stream spending approval tx`, {
+    senderWalletAddress,
+    sourceAta: sourceBalance.ataAddress,
+    delegateWalletAddress: broadcasterSigner.address,
+    amount,
+    amountBaseUnits: amountBaseUnits.toString(),
+    decimals,
+    tokenProgramAddress: switchedTokenProgramAddress,
+  })
+
+  const approveInstruction = {
+    programAddress: switchedTokenProgramAddress,
+    accounts: [
+      { address: address(sourceBalance.ataAddress), role: AccountRole.WRITABLE },
+      { address: address(SWITCHED_TOKEN_MINT), role: AccountRole.READONLY },
+      { address: broadcasterSigner.address, role: AccountRole.READONLY },
+      { address: address(senderWalletAddress), role: AccountRole.WRITABLE_SIGNER },
+    ],
+    data: encodeApproveCheckedParams(amountBaseUnits, decimals),
+  }
+
+  const transactionMessage = appendTransactionMessageInstruction(
+    approveInstruction,
+    setTransactionMessageLifetimeUsingBlockhash(
+      latestBlockhash,
+      setTransactionMessageFeePayerSigner(
+        broadcasterSigner,
+        createTransactionMessage({ version: 0 }),
+      ),
+    ),
+  )
+
+  const unsignedTransaction = await partiallySignTransactionMessageWithSigners(transactionMessage)
+  const wireTransactionBytes = getTransactionEncoder().encode(unsignedTransaction)
+
+  return {
+    tokenMint: SWITCHED_TOKEN_MINT,
+    senderWalletAddress,
+    destinationWalletAddress: broadcasterSigner.address,
+    destinationAta: sourceBalance.ataAddress,
+    amount,
+    transactionBase64: Buffer.from(wireTransactionBytes).toString("base64"),
+  }
+}
+
+export async function submitStreamSpendingApprovalTransaction(
+  senderWalletAddress: string,
+  signedTransactionBase64: string,
+  logScope = "streams:approval",
+) {
+  const signedTransactionBytes = Buffer.from(signedTransactionBase64, "base64")
+  const signedTransaction = getTransactionDecoder().decode(signedTransactionBytes)
+  assertIsFullySignedTransaction(signedTransaction)
+  assertIsTransactionWithinSizeLimit(signedTransaction)
+
+  const config = getPlatformWalletConfig()
+  const rpc = createSolanaRpc(config.rpcUrl as Parameters<typeof createSolanaRpc>[0])
+  const sendTransactionWithoutConfirming = sendTransactionWithoutConfirmingFactory({ rpc })
+
+  await sendTransactionWithoutConfirming(signedTransaction, { commitment: "confirmed" })
+  const signature = getSignatureFromTransaction(signedTransaction)
+
+  console.log(`[${logScope}] stream spending approval sent`, {
+    senderWalletAddress,
+    signature,
+  })
+
+  return {
+    senderWalletAddress,
+    signature,
+  }
+}
+
+export async function chargeApprovedSwtdBlockTransaction(
+  senderWalletAddress: string,
+  chargeMinutes: number,
+  logScope = "streams:billing",
+) {
+  ensureRuntimePrimitives(logScope)
+
+  if (!Number.isFinite(chargeMinutes) || chargeMinutes <= 0) {
+    throw new Error("Invalid charge block minutes")
+  }
+
+  const amountUsd = (chargeMinutes / 60) * 0.5
+  const amountSwtd = amountUsd / 0.00000536288
+  const config = getPlatformWalletConfig()
+  const rpc = createSolanaRpc(config.rpcUrl as Parameters<typeof createSolanaRpc>[0])
+  const broadcasterSigner = await getBroadcasterSigner()
+  const treasuryWalletAddress = getSwtdTreasuryWalletAddress() ?? broadcasterSigner.address
+  const switchedTokenProgramAddress = await fetchMintProgramAddress(SWITCHED_TOKEN_MINT)
+  const mintSupply = await rpc
+    .getTokenSupply(address(SWITCHED_TOKEN_MINT), { commitment: "confirmed" })
+    .send()
+  const decimals = mintSupply.value.decimals
+  const amountBaseUnits = BigInt(Math.round(amountSwtd * 10 ** decimals))
+  const sourceBalance = await fetchWalletMintBalance(senderWalletAddress, SWITCHED_TOKEN_MINT)
+  const treasuryAta = await deriveAssociatedTokenAddress(
+    treasuryWalletAddress,
+    SWITCHED_TOKEN_MINT,
+    switchedTokenProgramAddress,
+  )
+  const treasuryAccount = await fetchEncodedAccount(rpc, address(treasuryAta))
+  const { value: latestBlockhash } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send()
+
+  console.log(`[${logScope}] charging approved swtd block`, {
+    senderWalletAddress,
+    delegateWalletAddress: broadcasterSigner.address,
+    sourceAta: sourceBalance.ataAddress,
+    treasuryWalletAddress,
+    treasuryAta,
+    chargeMinutes,
+    amountSwtd,
+    amountBaseUnits: amountBaseUnits.toString(),
+  })
+
+  const transferInstruction = {
+    programAddress: switchedTokenProgramAddress,
+    accounts: [
+      { address: address(sourceBalance.ataAddress), role: AccountRole.WRITABLE },
+      { address: address(SWITCHED_TOKEN_MINT), role: AccountRole.READONLY },
+      { address: address(treasuryAta), role: AccountRole.WRITABLE },
+      { address: broadcasterSigner.address, role: AccountRole.WRITABLE_SIGNER },
+    ],
+    data: encodeTransferCheckedParams(amountBaseUnits, decimals),
+  }
+
+  const transactionMessage = appendTransactionMessageInstruction(
+    transferInstruction,
+    !treasuryAccount.exists
+      ? appendTransactionMessageInstruction(
+          buildCreateAssociatedTokenAccountInstruction(
+            broadcasterSigner.address,
+            treasuryAta,
+            treasuryWalletAddress,
+            SWITCHED_TOKEN_MINT,
+            switchedTokenProgramAddress,
+          ),
+          setTransactionMessageLifetimeUsingBlockhash(
+            latestBlockhash,
+            setTransactionMessageFeePayerSigner(
+              broadcasterSigner,
+              createTransactionMessage({ version: 0 }),
+            ),
+          ),
+        )
+      : setTransactionMessageLifetimeUsingBlockhash(
+          latestBlockhash,
+          setTransactionMessageFeePayerSigner(
+            broadcasterSigner,
+            createTransactionMessage({ version: 0 }),
+          ),
+        ),
+  )
+
+  const signedTransaction = await partiallySignTransactionMessageWithSigners(transactionMessage)
+  const wireTransactionBytes = getTransactionEncoder().encode(signedTransaction)
+  const decodedTransaction = getTransactionDecoder().decode(wireTransactionBytes)
+  assertIsFullySignedTransaction(decodedTransaction)
+  assertIsTransactionWithinSizeLimit(decodedTransaction)
+
+  const sendTransactionWithoutConfirming = sendTransactionWithoutConfirmingFactory({ rpc })
+  await sendTransactionWithoutConfirming(decodedTransaction, { commitment: "confirmed" })
+  const signature = getSignatureFromTransaction(decodedTransaction)
+
+  console.log(`[${logScope}] charged approved swtd block`, {
+    senderWalletAddress,
+    signature,
+    chargeMinutes,
+  })
+
+  return {
+    senderWalletAddress,
+    signature,
+    chargeMinutes,
+    amountSwtd,
+  }
+}
+
+export async function prepareDirectSwtdChargeTransaction(
+  senderWalletAddress: string,
+  swtdAmount: string,
+  logScope = "streams:topup",
+) {
+  ensureRuntimePrimitives(logScope)
+
+  const amount = Number(swtdAmount)
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Invalid $SWTD amount")
+  }
+
+  const config = getPlatformWalletConfig()
+  const rpc = createSolanaRpc(config.rpcUrl as Parameters<typeof createSolanaRpc>[0])
+  const broadcasterSigner = await getBroadcasterSigner()
+  const treasuryWalletAddress = getSwtdTreasuryWalletAddress() ?? broadcasterSigner.address
+  const normalizedTreasuryWalletAddress = address(treasuryWalletAddress)
+  const { value: latestBlockhash } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send()
+
+  const sourceBalance = await fetchWalletMintBalance(senderWalletAddress, SWITCHED_TOKEN_MINT)
+  const switchedTokenProgramAddress = await fetchMintProgramAddress(SWITCHED_TOKEN_MINT)
+  const mintSupply = await rpc
+    .getTokenSupply(address(SWITCHED_TOKEN_MINT), { commitment: "confirmed" })
+    .send()
+  const decimals = mintSupply.value.decimals
+  const amountBaseUnits = BigInt(Math.round(amount * 10 ** decimals))
+  if (BigInt(sourceBalance.amount) < amountBaseUnits) {
+    throw new Error("Insufficient $SWTD balance")
+  }
+
+  const treasuryAta = await deriveAssociatedTokenAddress(
+    treasuryWalletAddress,
+    SWITCHED_TOKEN_MINT,
+    switchedTokenProgramAddress,
+  )
+  const treasuryAccount = await fetchEncodedAccount(rpc, address(treasuryAta))
+
+  console.log(`[${logScope}] preparing direct swtd charge tx`, {
+    senderWalletAddress,
+    broadcasterWalletAddress: broadcasterSigner.address,
+    treasuryWalletAddress: normalizedTreasuryWalletAddress,
+    sourceAta: sourceBalance.ataAddress,
+    treasuryAta,
+    amount,
+    amountBaseUnits: amountBaseUnits.toString(),
+    decimals,
+  })
+
+  const transferInstruction = {
+    programAddress: switchedTokenProgramAddress,
+    accounts: [
+      { address: address(sourceBalance.ataAddress), role: AccountRole.WRITABLE },
+      { address: address(SWITCHED_TOKEN_MINT), role: AccountRole.READONLY },
+      { address: address(treasuryAta), role: AccountRole.WRITABLE },
+      { address: address(senderWalletAddress), role: AccountRole.WRITABLE_SIGNER },
+    ],
+    data: encodeTransferCheckedParams(amountBaseUnits, decimals),
+  }
+
+  const transactionMessage = appendTransactionMessageInstruction(
+    transferInstruction,
+    !treasuryAccount.exists
+      ? appendTransactionMessageInstruction(
+          buildCreateAssociatedTokenAccountInstruction(
+            broadcasterSigner.address,
+            treasuryAta,
+            treasuryWalletAddress,
+            SWITCHED_TOKEN_MINT,
+            switchedTokenProgramAddress,
+          ),
+          setTransactionMessageLifetimeUsingBlockhash(
+            latestBlockhash,
+            setTransactionMessageFeePayerSigner(
+              broadcasterSigner,
+              createTransactionMessage({ version: 0 }),
+            ),
+          ),
+        )
+      : setTransactionMessageLifetimeUsingBlockhash(
+          latestBlockhash,
+          setTransactionMessageFeePayerSigner(
+            broadcasterSigner,
+            createTransactionMessage({ version: 0 }),
+          ),
+        ),
+  )
+
+  const unsignedTransaction = await partiallySignTransactionMessageWithSigners(transactionMessage)
+  const wireTransactionBytes = getTransactionEncoder().encode(unsignedTransaction)
+
+  return {
+    tokenMint: SWITCHED_TOKEN_MINT,
+    senderWalletAddress,
+    destinationWalletAddress: normalizedTreasuryWalletAddress,
+    destinationAta: treasuryAta,
+    amount,
+    transactionBase64: Buffer.from(wireTransactionBytes).toString("base64"),
   }
 }
 

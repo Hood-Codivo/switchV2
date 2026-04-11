@@ -146,6 +146,7 @@ export function useStudio(): UseStudioReturn {
   const preScreenShareSnapshotRef = useRef<{ layoutId: string } | null>(null)
 
   const createSession = useAction(api.studio.createStudioSession)
+  const billingHeartbeat = useAction(api.streams.heartbeat)
   const endSessionAction = useAction(api.studio.endStudioSession)
   const generateInviteTokenMutation = useMutation(api.studio.generateInviteToken)
   const admitGuestAction = useAction(api.studio.admitGuest)
@@ -447,6 +448,18 @@ export function useStudio(): UseStudioReturn {
       setStatus("error")
     })
   }, [status, activeSession, connectWithToken])
+
+  useEffect(() => {
+    if (status !== "connected") return
+
+    const interval = setInterval(() => {
+      void billingHeartbeat({}).catch(() => {})
+    }, 15_000)
+
+    void billingHeartbeat({}).catch(() => {})
+
+    return () => clearInterval(interval)
+  }, [billingHeartbeat, status])
 
   // ─── Track controls ───────────────────────────────────────────────────────
 
