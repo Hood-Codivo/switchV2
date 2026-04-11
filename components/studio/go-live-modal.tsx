@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useQuery } from "convex/react";
-import { ChevronDown, Loader2 } from "lucide-react";
+import { ChevronDown, Loader2, Youtube } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { api } from "@/convex/_generated/api";
 import { CATEGORIES } from "@/convex/schema";
 import type { StreamCategory } from "@/convex/schema";
@@ -24,6 +25,7 @@ type GoLiveModalProps = {
     title: string,
     category: StreamCategory,
     sessionPlan: StreamSessionPlan,
+    destinations: { youtube: boolean },
   ) => Promise<void>;
   isStarting: boolean;
 };
@@ -37,7 +39,13 @@ export function GoLiveModal({
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState<StreamCategory | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [youtubeEnabled, setYoutubeEnabled] = useState(true);
   const currentUser = useQuery(api.users.getCurrentUser, {});
+  const connectedPlatforms = useQuery(api.connectedPlatforms.getConnectedPlatforms, {});
+
+  const youtubeConnection = connectedPlatforms?.find(
+    (p) => p.platform === "youtube" && p.status === "active",
+  );
   const swtdBalance = useWalletMintBalance(
     currentUser?.walletAddress,
     SWITCHED_TOKEN_MINT,
@@ -81,11 +89,16 @@ export function GoLiveModal({
 
   async function handleConfirm() {
     if (!canSubmit || category === null) return;
-    await onConfirm(title.trim(), category, {
-      plannedMinutes: 60,
-      allowExtraUsageSpending: true,
-      overtimeMinutes: 0,
-    });
+    await onConfirm(
+      title.trim(),
+      category,
+      {
+        plannedMinutes: 60,
+        allowExtraUsageSpending: true,
+        overtimeMinutes: 0,
+      },
+      { youtube: !!youtubeConnection && youtubeEnabled },
+    );
   }
 
   return (
@@ -218,6 +231,50 @@ export function GoLiveModal({
                 You need at least 30 minutes worth of $SWTD to start streaming.
               </p>
             )}
+        </div>
+
+        {/* Destinations */}
+        <div className="mb-6 space-y-2">
+          <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">
+            Destinations
+          </p>
+          <div className="space-y-2">
+            {/* Switched — always on */}
+            <div className="flex items-center justify-between rounded-lg bg-zinc-800/50 px-3 py-2">
+              <div className="flex items-center gap-2">
+                <div className="size-2 rounded-full bg-red-500" />
+                <span className="text-sm text-zinc-300">Switched</span>
+              </div>
+              <span className="text-xs text-zinc-500">Always on</span>
+            </div>
+
+            {/* YouTube — toggle if connected */}
+            {youtubeConnection && (
+              <div className="flex items-center justify-between rounded-lg bg-zinc-800/50 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <Youtube className="size-4 text-red-500" />
+                  <span className="text-sm text-zinc-300">
+                    {youtubeConnection.channelTitle ?? "YouTube"}
+                  </span>
+                </div>
+                <Switch
+                  checked={youtubeEnabled}
+                  onCheckedChange={setYoutubeEnabled}
+                  disabled={isStarting}
+                />
+              </div>
+            )}
+
+            {/* No platforms connected */}
+            {(!connectedPlatforms || connectedPlatforms.length === 0) && (
+              <a
+                href="/dashboard/settings/stream"
+                className="block text-center text-xs text-zinc-500 transition-colors hover:text-zinc-300"
+              >
+                Connect platforms in Settings →
+              </a>
+            )}
+          </div>
         </div>
 
         {/* Actions */}

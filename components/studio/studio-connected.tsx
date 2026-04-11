@@ -901,7 +901,7 @@ export function StudioConnected({
         <GoLiveModal
           open={modalOpen}
           onClose={() => setModalOpen(false)}
-          onConfirm={async (title, category, sessionPlan) => {
+          onConfirm={async (title, category, sessionPlan, _destinations) => {
             await onGoLive(title, category, sessionPlan);
             setModalOpen(false);
           }}
