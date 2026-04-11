@@ -19,12 +19,24 @@ const solanaChain = solanaRpcUrl.includes("devnet")
 
 export type GoLiveState = "idle" | "starting" | "live" | "ending"
 export type StreamHealth = "good" | "degraded" | "poor" | "disconnected"
+export type StreamDurationOption = 30 | 60 | 120 | 180 | 300
+export type StreamOvertimeOption = 0 | 15 | 30 | 60
+
+export type StreamSessionPlan = {
+  plannedMinutes: StreamDurationOption
+  allowExtraUsageSpending: boolean
+  overtimeMinutes: StreamOvertimeOption
+}
 
 export type UseGoLiveReturn = {
   liveState: GoLiveState
   viewerCount: number
   health: StreamHealth | null
-  goLive: (title: string, category: StreamCategory) => Promise<void>
+  goLive: (
+    title: string,
+    category: StreamCategory,
+    sessionPlan: StreamSessionPlan,
+  ) => Promise<void>
   endStream: () => Promise<void>
 }
 
@@ -81,6 +93,8 @@ export function useGoLive(
 
   // Convex actions — go-live and end-stream handled entirely on the backend
   const preparePlatformWalletAction = useAction(api.serverPlatformWallet.prepareEnsurePlatformWallet)
+  const preparePrepaidSwtdChargeAction = useAction(api.serverPlatformWallet.preparePrepaidSwtdCharge)
+  const submitPrepaidSwtdChargeAction = useAction(api.serverPlatformWallet.submitPrepaidSwtdCharge)
   const submitPlatformWalletAction = useAction(api.serverPlatformWallet.submitEnsurePlatformWallet)
   const goLiveAction = useAction(api.streams.goLive)
   const endLivestreamAction = useAction(api.streams.endLivestream)
@@ -120,7 +134,7 @@ export function useGoLive(
   // ─── goLive ──────────────────────────────────────────────────────────────
 
   const goLive = useCallback(
-    async (title: string, category: StreamCategory) => {
+    async (title: string, category: StreamCategory, sessionPlan: StreamSessionPlan) => {
       setLiveState("starting")
       try {
         const walletAddress = currentUser?.walletAddress
@@ -145,7 +159,20 @@ export function useGoLive(
           })
         }
 
-        const { streamId } = await goLiveAction({ title, category })
+        const prepaidChargeResult = await preparePrepaidSwtdChargeAction({ sessionPlan })
+        if (prepaidChargeResult.transactionBase64) {
+          const signedTransaction = await signTransaction({
+            wallet: embeddedWallet,
+            chain: solanaChain,
+            transaction: decodeBase64ToBytes(prepaidChargeResult.transactionBase64),
+          })
+
+          await submitPrepaidSwtdChargeAction({
+            signedTransactionBase64: encodeBytesToBase64(signedTransaction.signedTransaction),
+          })
+        }
+
+        const { streamId } = await goLiveAction({ title, category, sessionPlan })
         streamIdRef.current = streamId as Id<"streams">
         setLiveState("live")
         startHealthMonitoring()
@@ -158,10 +185,12 @@ export function useGoLive(
     [
       currentUser?.walletAddress,
       goLiveAction,
+      preparePrepaidSwtdChargeAction,
       preparePlatformWalletAction,
       signTransaction,
       solanaWallets,
       startHealthMonitoring,
+      submitPrepaidSwtdChargeAction,
       submitPlatformWalletAction,
     ],
   )

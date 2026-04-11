@@ -3,7 +3,7 @@
 import { useEffect } from "react"
 import { RealtimeKitProvider } from "@cloudflare/realtimekit-react"
 import { RtkParticipantsAudio } from "@cloudflare/realtimekit-react-ui"
-import { useQuery, useMutation } from "convex/react"
+import { useQuery, useAction } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useStudio } from "@/hooks/use-studio"
 import { useGuestStudio } from "@/hooks/use-guest-studio"
@@ -27,7 +27,7 @@ export function HostSessionView() {
 
   // Keep lastHeartbeatAt fresh on the active studio session so that any future
   // idle-session cleanup job can distinguish live sessions from abandoned ones.
-  const sendHeartbeat = useMutation(api.streams.heartbeat)
+  const sendHeartbeat = useAction(api.streams.heartbeat)
   useEffect(() => {
     if (status !== "connected") return
     void sendHeartbeat({})
