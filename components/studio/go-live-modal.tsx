@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "convex/react";
 import { ChevronDown, Loader2, Youtube } from "lucide-react";
+import Link from "next/link";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/convex/_generated/api";
 import { CATEGORIES } from "@/convex/schema";
@@ -267,12 +268,12 @@ export function GoLiveModal({
 
             {/* No platforms connected */}
             {(!connectedPlatforms || connectedPlatforms.length === 0) && (
-              <a
+              <Link
                 href="/dashboard/settings/stream"
                 className="block text-center text-xs text-zinc-500 transition-colors hover:text-zinc-300"
               >
                 Connect platforms in Settings →
-              </a>
+              </Link>
             )}
           </div>
         </div>
