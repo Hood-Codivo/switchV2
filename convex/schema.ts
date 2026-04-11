@@ -231,4 +231,33 @@ export default defineSchema({
   })
     .index("by_privyDid", ["privyDid"])
     .index("by_username", ["username"]),
+  connectedPlatforms: defineTable({
+    userId: v.id("users"),
+    platform: v.union(v.literal("youtube"), v.literal("x")),
+
+    // OAuth tokens (encrypted before storage with AES-256-GCM)
+    accessToken: v.optional(v.string()),
+    refreshToken: v.optional(v.string()),
+    tokenExpiresAt: v.optional(v.number()),
+
+    // Manual RTMP (for X later)
+    rtmpUrl: v.optional(v.string()),
+    streamKey: v.optional(v.string()),
+
+    // Platform-specific metadata
+    channelId: v.optional(v.string()),
+    channelTitle: v.optional(v.string()),
+
+    // Common
+    displayName: v.optional(v.string()),
+    connectedAt: v.number(),
+    lastUsedAt: v.optional(v.number()),
+    status: v.union(
+      v.literal("active"),
+      v.literal("expired"),
+      v.literal("revoked"),
+    ),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_and_platform", ["userId", "platform"]),
 })
