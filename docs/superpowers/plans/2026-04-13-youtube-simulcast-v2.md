@@ -28,6 +28,10 @@
 - ~~Option A (RealtimeKit → Cloudflare Stream Live Input → Live Outputs)~~ → replaced by RealtimeKit `/recordings` path
 - ~~Per-creator persistent Live Input~~ → not needed, no Live Input in the architecture
 
+**Task 0 verification (2026-04-12):**
+- POST `/recordings` with `rtmp_out_config: { rtmp_url }` → status `201`, body shape `{"success":true,"data":{"id":"<uuid>","meeting_id":"<uuid>","status":"INVOKED","output_file_name":"<meeting_id>_<timestamp>.mp4","start_reason":{"reason":"API_CALL","caller":{"type":"ORGANIZATION"}},...}}`, recording id field `id`
+- Stop endpoint: `PUT /recordings/:id` with body `{"action":"stop"}` — allowed actions are `stop`, `pause`, `resume`. Returns `400 "The recording is not in progress"` when recording has already errored (expected with placeholder RTMP URL); the action name and endpoint shape are confirmed valid. `DELETE /recordings/:id`, `POST /recordings/:id/stop`, and all other verb/path combinations return `404`.
+
 ---
 
 ## Known limitations for Phase 1 (flagged for Phase 2)
