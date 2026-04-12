@@ -71,6 +71,7 @@ export default defineSchema({
     graceStartedAt: v.optional(v.number()),
     spendingApprovedAt: v.optional(v.number()),
     spendingApprovalSignature: v.optional(v.string()),
+    simulcastEnabled: v.optional(v.boolean()), // true if creator opted to simulcast this stream
   })
     .index("by_status", ["status"])
     .index("by_creator", ["creatorId"])
@@ -260,4 +261,39 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_user_and_platform", ["userId", "platform"]),
+  streamBroadcasts: defineTable({
+    streamId: v.id("streams"),
+    platform: v.union(v.literal("youtube"), v.literal("x")),
+
+    status: v.union(
+      v.literal("pending"),
+      v.literal("live"),
+      v.literal("degraded"),
+      v.literal("ended"),
+      v.literal("failed"),
+    ),
+
+    // External platform identifiers
+    externalBroadcastId: v.optional(v.string()),  // YouTube liveBroadcast.id
+    externalStreamId: v.optional(v.string()),     // YouTube liveStream.id
+
+    // RealtimeKit recording id driving the RTMP push to the destination
+    rtkRecordingId: v.optional(v.string()),
+
+    // Pre-broadcast metadata (user-supplied in go-live modal)
+    title: v.optional(v.string()),
+    description: v.optional(v.string()),
+    privacy: v.optional(v.union(v.literal("public"), v.literal("unlisted"), v.literal("private"))),
+
+    // Observability
+    errorMessage: v.optional(v.string()),
+    degradedSince: v.optional(v.number()),
+    createdAt: v.number(),
+    endedAt: v.optional(v.number()),
+  })
+    .index("by_stream", ["streamId"])
+    .index("by_stream_and_platform", ["streamId", "platform"])
+    .index("by_status", ["status"])
+    .index("by_external_broadcast", ["externalBroadcastId"])
+    .index("by_rtk_recording", ["rtkRecordingId"]),
 })
