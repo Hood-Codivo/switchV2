@@ -514,7 +514,7 @@ git commit -m "feat(convex): streamBroadcasts table CRUD with lifecycle transiti
 
 - [ ] **Step 1: Implement the wrapper**
 
-Use the verb discovered in Task 0 for the `stop` call. The snippet below assumes `DELETE /recordings/:id` — **swap to `POST /recordings/:id/stop` if Task 0 found the other shape.**
+Stop verb confirmed by Task 0 verification (commit `4c2b70f`): `PUT /recordings/:id` with body `{"action":"stop"}`. The snippet below uses that shape.
 
 ```typescript
 // convex/rtkRecordings.ts
@@ -562,12 +562,20 @@ export const startRtmpRecording = internalAction({
 export const stopRecording = internalAction({
   args: { recordingId: v.string() },
   handler: async (_ctx, { recordingId }): Promise<void> => {
-    // NOTE: verb/path per Task 0 verification. Swap to POST .../stop if DELETE doesn't work.
+    // PUT /recordings/:id with { action: "stop" } per Task 0 verification.
+    // Allowed actions: "stop" | "pause" | "resume". 400 "not in progress" is
+    // benign — means the recording already errored/ended; treat as success.
     const res = await fetch(`${rtkBaseUrl()}/recordings/${recordingId}`, {
-      method: "DELETE",
+      method: "PUT",
       headers: rtkHeaders(),
+      body: JSON.stringify({ action: "stop" }),
     })
     if (res.status === 404) return // already gone
+    if (res.status === 400) {
+      const body = await res.text()
+      if (/not in progress|not active/i.test(body)) return
+      throw new Error(`rtk.stopRecording unexpected 400: ${body}`)
+    }
     if (!res.ok) {
       const body = await res.text()
       throw new Error(`rtk.stopRecording failed: ${res.status} — ${body}`)
