@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { ConvexHttpClient } from "convex/browser"
 import { api } from "@/convex/_generated/api"
-import { verifyState } from "@/convex/lib/token-encryption"
+import { verifyState } from "@/convex/lib/tokenEncryption"
 
 const CONVEX_URL = process.env.NEXT_PUBLIC_CONVEX_URL!
 const STATE_MAX_AGE_SECONDS = 600 // 10 minutes
