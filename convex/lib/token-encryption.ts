@@ -1,3 +1,5 @@
+"use node"
+
 import { createCipheriv, createDecipheriv, randomBytes, createHmac } from "crypto"
 
 function getKey(): Buffer {
