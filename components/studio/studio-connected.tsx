@@ -29,6 +29,7 @@ import type {
   GoLiveState,
   StreamHealth,
   StreamSessionPlan,
+  SimulcastOptions,
 } from "@/hooks/use-go-live";
 import type { StreamCategory } from "@/convex/schema";
 import { StudioBottomBar } from "./studio-bottom-bar";
@@ -517,6 +518,7 @@ type StudioConnectedProps = {
     title: string,
     category: StreamCategory,
     sessionPlan: StreamSessionPlan,
+    simulcast?: SimulcastOptions,
   ) => Promise<void>;
   onEndStream: () => Promise<void>;
   isHost: boolean;
@@ -901,8 +903,8 @@ export function StudioConnected({
         <GoLiveModal
           open={modalOpen}
           onClose={() => setModalOpen(false)}
-          onConfirm={async (title, category, sessionPlan, _destinations) => {
-            await onGoLive(title, category, sessionPlan);
+          onConfirm={async (title, category, sessionPlan, simulcast) => {
+            await onGoLive(title, category, sessionPlan, simulcast);
             setModalOpen(false);
           }}
           isStarting={liveState === "starting"}

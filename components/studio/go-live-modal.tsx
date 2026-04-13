@@ -4,7 +4,17 @@ import { useState } from "react";
 import { useQuery } from "convex/react";
 import { ChevronDown, Loader2, Youtube } from "lucide-react";
 import Link from "next/link";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/convex/_generated/api";
 import { CATEGORIES } from "@/convex/schema";
 import type { StreamCategory } from "@/convex/schema";
@@ -19,6 +29,12 @@ import {
 } from "@/lib/stream-billing";
 import { cn } from "@/lib/utils";
 
+type YoutubeSimulcastPayload = {
+  title: string;
+  description: string;
+  privacy: "public" | "unlisted" | "private";
+};
+
 type GoLiveModalProps = {
   open: boolean;
   onClose: () => void;
@@ -26,7 +42,7 @@ type GoLiveModalProps = {
     title: string,
     category: StreamCategory,
     sessionPlan: StreamSessionPlan,
-    destinations: { youtube: boolean },
+    simulcast?: { youtube?: YoutubeSimulcastPayload },
   ) => Promise<void>;
   isStarting: boolean;
 };
@@ -41,8 +57,12 @@ export function GoLiveModal({
   const [category, setCategory] = useState<StreamCategory | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [youtubeEnabled, setYoutubeEnabled] = useState(true);
+  const [youtubeTitle, setYoutubeTitle] = useState("");
+  const [youtubeDescription, setYoutubeDescription] = useState("");
+  const [youtubePrivacy, setYoutubePrivacy] = useState<"public" | "unlisted" | "private">("public");
   const currentUser = useQuery(api.users.getCurrentUser, {});
   const connectedPlatforms = useQuery(api.connectedPlatforms.getConnectedPlatforms, {});
+  const ytConnection = useQuery(api.connectedPlatforms.getPlatformByType, { platform: "youtube" });
 
   const youtubeConnection = connectedPlatforms?.find(
     (p) => p.platform === "youtube" && p.status === "active",
@@ -90,15 +110,40 @@ export function GoLiveModal({
 
   async function handleConfirm() {
     if (!canSubmit || category === null) return;
+    const streamTitle = title.trim();
+    const sessionPlan: StreamSessionPlan = {
+      plannedMinutes: 60,
+      allowExtraUsageSpending: true,
+      overtimeMinutes: 0,
+    };
+
+    if (youtubeEnabled) {
+      if (!ytConnection || ytConnection.status !== "active") {
+        const confirmed = window.confirm(
+          "YouTube isn't connected (or the connection expired). Go live on Switched only?\n\nClick OK to continue without YouTube, or Cancel to go reconnect YouTube first.",
+        );
+        if (!confirmed) {
+          window.open("/dashboard/settings/stream?reconnect=youtube", "_blank");
+          return;
+        }
+        await onConfirm(streamTitle, category, sessionPlan);
+        return;
+      }
+    }
+
     await onConfirm(
-      title.trim(),
+      streamTitle,
       category,
-      {
-        plannedMinutes: 60,
-        allowExtraUsageSpending: true,
-        overtimeMinutes: 0,
-      },
-      { youtube: !!youtubeConnection && youtubeEnabled },
+      sessionPlan,
+      youtubeEnabled
+        ? {
+            youtube: {
+              title: youtubeTitle || streamTitle,
+              description: youtubeDescription,
+              privacy: youtubePrivacy,
+            },
+          }
+        : undefined,
     );
   }
 
@@ -251,18 +296,69 @@ export function GoLiveModal({
 
             {/* YouTube — toggle if connected */}
             {youtubeConnection && (
-              <div className="flex items-center justify-between rounded-lg bg-zinc-800/50 px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <Youtube className="size-4 text-red-500" />
-                  <span className="text-sm text-zinc-300">
-                    {youtubeConnection.channelTitle ?? "YouTube"}
-                  </span>
+              <div className="rounded-lg bg-zinc-800/50 px-3 py-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Youtube className="size-4 text-red-500" />
+                    <span className="text-sm text-zinc-300">
+                      {youtubeConnection.channelTitle ?? "YouTube"}
+                    </span>
+                  </div>
+                  <Switch
+                    checked={youtubeEnabled}
+                    onCheckedChange={setYoutubeEnabled}
+                    disabled={isStarting}
+                  />
                 </div>
-                <Switch
-                  checked={youtubeEnabled}
-                  onCheckedChange={setYoutubeEnabled}
-                  disabled={isStarting}
-                />
+                {youtubeEnabled && (
+                  <div className="mt-3 space-y-3 rounded-md border border-zinc-700/50 bg-zinc-900/50 p-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="yt-title" className="text-xs text-zinc-400">
+                        YouTube title
+                      </Label>
+                      <Input
+                        id="yt-title"
+                        value={youtubeTitle}
+                        onChange={(e) => setYoutubeTitle(e.target.value)}
+                        placeholder={title || "Stream title…"}
+                        disabled={isStarting}
+                        className="bg-zinc-800 text-zinc-100 placeholder-zinc-600 ring-zinc-700 focus-visible:ring-zinc-500"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="yt-description" className="text-xs text-zinc-400">
+                        Description
+                      </Label>
+                      <Textarea
+                        id="yt-description"
+                        value={youtubeDescription}
+                        onChange={(e) => setYoutubeDescription(e.target.value)}
+                        rows={3}
+                        disabled={isStarting}
+                        className="bg-zinc-800 text-zinc-100 ring-zinc-700 focus-visible:ring-zinc-500"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-zinc-400">Privacy</Label>
+                      <Select
+                        value={youtubePrivacy}
+                        onValueChange={(v) =>
+                          setYoutubePrivacy(v as "public" | "unlisted" | "private")
+                        }
+                        disabled={isStarting}
+                      >
+                        <SelectTrigger className="bg-zinc-800 text-zinc-100 ring-zinc-700">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-zinc-800 text-zinc-100">
+                          <SelectItem value="public">Public</SelectItem>
+                          <SelectItem value="unlisted">Unlisted</SelectItem>
+                          <SelectItem value="private">Private</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

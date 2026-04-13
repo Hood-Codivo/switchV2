@@ -28,6 +28,16 @@ export type StreamSessionPlan = {
   overtimeMinutes: StreamOvertimeOption
 }
 
+export type YoutubeSimulcastOptions = {
+  title: string
+  description: string
+  privacy: "public" | "unlisted" | "private"
+}
+
+export type SimulcastOptions = {
+  youtube?: YoutubeSimulcastOptions
+}
+
 export type UseGoLiveReturn = {
   liveState: GoLiveState
   viewerCount: number
@@ -36,6 +46,7 @@ export type UseGoLiveReturn = {
     title: string,
     category: StreamCategory,
     sessionPlan: StreamSessionPlan,
+    simulcast?: SimulcastOptions,
   ) => Promise<void>
   endStream: () => Promise<void>
 }
@@ -134,7 +145,7 @@ export function useGoLive(
   // ─── goLive ──────────────────────────────────────────────────────────────
 
   const goLive = useCallback(
-    async (title: string, category: StreamCategory, sessionPlan: StreamSessionPlan) => {
+    async (title: string, category: StreamCategory, sessionPlan: StreamSessionPlan, simulcast?: SimulcastOptions) => {
       setLiveState("starting")
       try {
         const walletAddress = currentUser?.walletAddress
@@ -172,7 +183,7 @@ export function useGoLive(
           })
         }
 
-        const { streamId } = await goLiveAction({ title, category, sessionPlan })
+        const { streamId } = await goLiveAction({ title, category, sessionPlan, simulcast })
         streamIdRef.current = streamId as Id<"streams">
         setLiveState("live")
         startHealthMonitoring()
