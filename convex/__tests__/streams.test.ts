@@ -2,7 +2,7 @@ import { convexTest } from "convex-test"
 import { expect, it, describe, vi, afterEach } from "vitest"
 import type { GenericMutationCtx } from "convex/server"
 import type { DataModel, Id } from "../_generated/dataModel"
-import { api } from "../_generated/api"
+import { api, internal } from "../_generated/api"
 import schema from "../schema"
 import type { StreamCategory } from "../schema"
 import { encrypt } from "../lib/tokenEncryption"
@@ -446,6 +446,83 @@ describe("streams.endLivestream simulcast tear-down", () => {
     // YouTube transition URL should contain broadcastStatus=complete
     const ytTransitionCall = calls.find((url) => url.includes("broadcastStatus=complete"))
     expect(ytTransitionCall).toBeTruthy()
+  })
+
+  it("cleanupOrphanBroadcasts marks live broadcasts whose stream is ended", async () => {
+    const t = convexTest(schema, modules)
+    stubEnvsForEnd()
+
+    // Seed an ended stream with a live broadcast (orphan scenario)
+    const { userId, streamId } = await t.run(async (ctx) =>
+      seedUserWithLiveStream(ctx, "orphan1"),
+    )
+    await t.run(async (ctx) => {
+      // Mark the stream as ended
+      await ctx.db.patch(streamId as Id<"streams">, { status: "ended", endedAt: Date.now() })
+      // Seed a live broadcast that was never torn down
+      await ctx.db.insert("streamBroadcasts", {
+        streamId: streamId as Id<"streams">,
+        platform: "youtube",
+        status: "live",
+        externalBroadcastId: "yt-b-orphan",
+        externalStreamId: "yt-s-orphan",
+        rtkRecordingId: "rec-orphan-1",
+        createdAt: Date.now(),
+      })
+    })
+    await t.run(async (ctx) => seedYoutubeConnectionForEnd(ctx, userId))
+
+    // performTeardown will call YouTube transition + RTK stopRecording + RTK livestream stop
+    mockFetchSequenceEnd([
+      { ok: true, status: 200, body: { id: "yt-b-orphan", status: { lifeCycleStatus: "complete" } } }, // YouTube transition
+      { ok: true, status: 200, body: {} }, // RTK stopRecording
+      { ok: true, status: 200, body: {} }, // RTK livestream stop
+    ])
+
+    await t.action(internal.streams.cleanupOrphanBroadcasts, {})
+
+    const broadcasts = await t.run(async (ctx) =>
+      ctx.db
+        .query("streamBroadcasts")
+        .withIndex("by_stream", (q) => q.eq("streamId", streamId as Id<"streams">))
+        .collect(),
+    )
+    expect(broadcasts).toHaveLength(1)
+    expect(broadcasts[0].status).toBe("ended")
+  })
+
+  it("cleanupOrphanBroadcasts marks broadcasts degraded >10min as failed", async () => {
+    const t = convexTest(schema, modules)
+    stubEnvsForEnd()
+
+    // Seed a live stream with a degraded broadcast older than 10 minutes
+    const { streamId } = await t.run(async (ctx) =>
+      seedUserWithLiveStream(ctx, "orphan2"),
+    )
+    await t.run(async (ctx) => {
+      await ctx.db.insert("streamBroadcasts", {
+        streamId: streamId as Id<"streams">,
+        platform: "youtube",
+        status: "degraded",
+        degradedSince: Date.now() - 15 * 60_000, // 15 minutes ago
+        externalBroadcastId: "yt-b-degraded",
+        externalStreamId: "yt-s-degraded",
+        rtkRecordingId: "rec-degraded-1",
+        createdAt: Date.now() - 20 * 60_000,
+      })
+    })
+
+    await t.action(internal.streams.cleanupOrphanBroadcasts, {})
+
+    const broadcasts = await t.run(async (ctx) =>
+      ctx.db
+        .query("streamBroadcasts")
+        .withIndex("by_stream", (q) => q.eq("streamId", streamId as Id<"streams">))
+        .collect(),
+    )
+    expect(broadcasts).toHaveLength(1)
+    expect(broadcasts[0].status).toBe("failed")
+    expect(broadcasts[0].errorMessage).toBe("simulcast degraded for >10m")
   })
 
   it("YouTube 500 does not block local cleanup — broadcast still ends", async () => {

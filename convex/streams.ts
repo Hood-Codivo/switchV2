@@ -1068,6 +1068,39 @@ export const teardownByRtkMeeting = internalAction({
   },
 })
 
+// ─── cleanupOrphanBroadcasts ─────────────────────────────────────────────────
+// Safety cron (5 min) that sweeps active broadcasts and fixes any that are
+// orphaned: stream deleted, stream ended without simulcast teardown, or stuck
+// in degraded state for >10 minutes.
+
+export const cleanupOrphanBroadcasts = internalAction({
+  args: {},
+  handler: async (ctx): Promise<void> => {
+    const active = await ctx.runQuery(internal.streamBroadcasts.listActiveBroadcasts, {})
+    for (const b of active) {
+      const stream = await ctx.runQuery(internal.streams.getStreamById, { id: b.streamId })
+      if (!stream) {
+        await ctx.runMutation(internal.streamBroadcasts.markEnded, { id: b._id })
+        continue
+      }
+      if (stream.status === "ended") {
+        await ctx.runAction(internal.streams.performTeardown, {
+          streamId: stream._id,
+          userId: stream.creatorId,
+          cloudflareRoomId: "",
+        })
+        continue
+      }
+      if (b.status === "degraded" && b.degradedSince && Date.now() - b.degradedSince > 10 * 60_000) {
+        await ctx.runMutation(internal.streamBroadcasts.markFailed, {
+          id: b._id,
+          errorMessage: "simulcast degraded for >10m",
+        })
+      }
+    }
+  },
+})
+
 // ─── markSimulcastDegradedByRtkMeeting ───────────────────────────────────────
 // Called by the RealtimeKit `livestreaming.statusUpdate → OFFLINE` webhook event.
 // Marks all live broadcasts for the stream as degraded.
