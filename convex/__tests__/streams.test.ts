@@ -1,10 +1,11 @@
 import { convexTest } from "convex-test"
-import { expect, it, describe } from "vitest"
+import { expect, it, describe, vi, afterEach } from "vitest"
 import type { GenericMutationCtx } from "convex/server"
-import type { DataModel } from "../_generated/dataModel"
+import type { DataModel, Id } from "../_generated/dataModel"
 import { api } from "../_generated/api"
 import schema from "../schema"
 import type { StreamCategory } from "../schema"
+import { encrypt } from "../lib/tokenEncryption"
 
 const modules = import.meta.glob("../**/*.ts")
 
@@ -297,5 +298,202 @@ describe("streams.listPastStreams", () => {
       .query(api.streams.listPastStreams, {})
 
     expect(results[0].tipTotal).toBe(0)
+  })
+})
+
+// ─── streams.endLivestream (simulcast tear-down) ──────────────────────────────
+
+const TEST_ENCRYPTION_KEY_END = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+
+function stubEnvsForEnd() {
+  vi.stubEnv("TOKEN_ENCRYPTION_KEY", TEST_ENCRYPTION_KEY_END)
+  vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "test-account")
+  vi.stubEnv("CLOUDFLARE_API_TOKEN", "test-cf-token")
+  vi.stubEnv("CLOUDFLARE_REALTIMEKIT_APP_ID", "test-app")
+  vi.stubEnv("GOOGLE_CLIENT_ID", "test-google-client")
+  vi.stubEnv("GOOGLE_CLIENT_SECRET", "test-google-secret")
+}
+
+function mockFetchSequenceEnd(
+  responses: Array<{ ok: boolean; status: number; body: unknown }>,
+) {
+  let idx = 0
+  const calls: string[] = []
+  const mockFn = vi.fn().mockImplementation((url: string) => {
+    calls.push(url as string)
+    const resp = responses[idx++] ?? { ok: false, status: 500, body: {} }
+    return Promise.resolve({
+      ok: resp.ok,
+      status: resp.status,
+      json: async () => resp.body,
+      text: async () => JSON.stringify(resp.body),
+    })
+  })
+  vi.stubGlobal("fetch", mockFn)
+  return { calls, mockFn }
+}
+
+async function seedUserWithLiveStream(ctx: GenericMutationCtx<DataModel>, username: string) {
+  const userId = await ctx.db.insert("users", {
+    privyDid: `did:privy:test-${username}`,
+    walletAddress: `7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV${username}`,
+    username,
+    displayName: username,
+    bio: "",
+    avatarUrl: null,
+    pointsBalance: 0,
+    followerCount: 0,
+    createdAt: Date.now(),
+  })
+  const streamId = await ctx.db.insert("streams", {
+    creatorId: userId,
+    username,
+    title: "Live Stream",
+    category: "Gaming",
+    status: "live",
+    viewerCount: 0,
+    peakViewerCount: 0,
+    playbackUrl: "https://cf.example.com/manifest.m3u8",
+    startedAt: Date.now(),
+    simulcastEnabled: true,
+  })
+  const sessionId = await ctx.db.insert("studioSessions", {
+    creatorId: userId,
+    cloudflareRoomId: "cf-room-end",
+    creatorAuthToken: "creator-token",
+    status: "active",
+    createdAt: Date.now(),
+    streamId,
+    spendingLimitMinutes: 60,
+    allowExtraUsageSpending: true,
+    remainingApprovedMinutes: 60,
+  })
+  return { userId, streamId, sessionId }
+}
+
+async function seedYoutubeConnectionForEnd(ctx: GenericMutationCtx<DataModel>, userId: Id<"users">) {
+  const accessToken = encrypt("ya29.test-access-token")
+  const refreshToken = encrypt("1//test-refresh-token")
+  return ctx.db.insert("connectedPlatforms", {
+    userId,
+    platform: "youtube",
+    accessToken,
+    refreshToken,
+    tokenExpiresAt: Date.now() + 3_600_000,
+    channelId: "UC-test",
+    channelTitle: "Test Channel",
+    displayName: "Test Channel",
+    connectedAt: Date.now(),
+    status: "active",
+  })
+}
+
+describe("streams.endLivestream simulcast tear-down", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("transitions YouTube broadcast to complete and stops RealtimeKit recording", async () => {
+    const t = convexTest(schema, modules)
+    stubEnvsForEnd()
+
+    const { userId, streamId } = await t.run(async (ctx) =>
+      seedUserWithLiveStream(ctx, "ender1"),
+    )
+    await t.run(async (ctx) => seedYoutubeConnectionForEnd(ctx, userId))
+
+    // Seed a live streamBroadcast
+    await t.run(async (ctx) => {
+      await ctx.db.insert("streamBroadcasts", {
+        streamId: streamId as Id<"streams">,
+        platform: "youtube",
+        status: "live",
+        externalBroadcastId: "yt-b-end",
+        externalStreamId: "yt-s-end",
+        rtkRecordingId: "rec-end-1",
+        createdAt: Date.now(),
+      })
+    })
+
+    // Fetch sequence for endLivestream with a live YouTube broadcast:
+    // 1. refreshYoutubeToken (no-op since not expired — but it may call token endpoint)
+    //    Actually the token is fresh, so refreshYoutubeToken won't fetch — skip
+    // 1. YouTube transitionBroadcast → complete (POST)
+    // 2. RealtimeKit stopRecording (PUT /recordings/:id)
+    // 3. RealtimeKit active-livestream/stop (POST)
+    const { calls } = mockFetchSequenceEnd([
+      { ok: true, status: 200, body: { id: "yt-b-end", status: { lifeCycleStatus: "complete" } } }, // YouTube transition
+      { ok: true, status: 200, body: {} }, // RTK stopRecording
+      { ok: true, status: 200, body: {} }, // RTK livestream stop
+    ])
+
+    await t
+      .withIdentity({ subject: "did:privy:test-ender1" })
+      .action(api.streams.endLivestream, { streamId: streamId as Id<"streams"> })
+
+    // Broadcast should be ended
+    const broadcasts = await t.run(async (ctx) =>
+      ctx.db
+        .query("streamBroadcasts")
+        .withIndex("by_stream", (q) => q.eq("streamId", streamId as Id<"streams">))
+        .collect(),
+    )
+    expect(broadcasts).toHaveLength(1)
+    expect(broadcasts[0].status).toBe("ended")
+
+    // Stream should be ended
+    const stream = await t.run(async (ctx) => ctx.db.get(streamId as Id<"streams">))
+    expect(stream?.status).toBe("ended")
+
+    // YouTube transition URL should contain broadcastStatus=complete
+    const ytTransitionCall = calls.find((url) => url.includes("broadcastStatus=complete"))
+    expect(ytTransitionCall).toBeTruthy()
+  })
+
+  it("YouTube 500 does not block local cleanup — broadcast still ends", async () => {
+    const t = convexTest(schema, modules)
+    stubEnvsForEnd()
+
+    const { userId, streamId } = await t.run(async (ctx) =>
+      seedUserWithLiveStream(ctx, "ender2"),
+    )
+    await t.run(async (ctx) => seedYoutubeConnectionForEnd(ctx, userId))
+
+    // Seed a live streamBroadcast
+    await t.run(async (ctx) => {
+      await ctx.db.insert("streamBroadcasts", {
+        streamId: streamId as Id<"streams">,
+        platform: "youtube",
+        status: "live",
+        externalBroadcastId: "yt-b-fail",
+        externalStreamId: "yt-s-fail",
+        rtkRecordingId: "rec-fail-1",
+        createdAt: Date.now(),
+      })
+    })
+
+    // YouTube transition returns 500 (best-effort — should not throw)
+    // Then RTK stopRecording and RTK livestream stop succeed
+    mockFetchSequenceEnd([
+      { ok: false, status: 500, body: { error: { code: 500, message: "Internal Server Error" } } }, // YouTube transition FAILS
+      { ok: true, status: 200, body: {} }, // RTK stopRecording
+      { ok: true, status: 200, body: {} }, // RTK livestream stop
+    ])
+
+    await t
+      .withIdentity({ subject: "did:privy:test-ender2" })
+      .action(api.streams.endLivestream, { streamId: streamId as Id<"streams"> })
+
+    // Broadcast should still be ended despite YouTube failure
+    const broadcasts = await t.run(async (ctx) =>
+      ctx.db
+        .query("streamBroadcasts")
+        .withIndex("by_stream", (q) => q.eq("streamId", streamId as Id<"streams">))
+        .collect(),
+    )
+    expect(broadcasts).toHaveLength(1)
+    expect(broadcasts[0].status).toBe("ended")
+
+    // Stream should still be ended
+    const stream = await t.run(async (ctx) => ctx.db.get(streamId as Id<"streams">))
+    expect(stream?.status).toBe("ended")
   })
 })

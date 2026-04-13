@@ -1,5 +1,5 @@
 import { v } from "convex/values"
-import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server"
+import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server"
 import { getAuthenticatedUser } from "./auth"
 import { api, internal } from "./_generated/api"
 import { categoryValidator, streamBillingStateValidator, streamStatusValidator } from "./schema"
@@ -902,6 +902,67 @@ export const listPastStreams = query({
   },
 })
 
+// ─── performTeardown ─────────────────────────────────────────────────────────
+// Internal action extracted so both endLivestream and the Task-7 webhook handler
+// (teardownByRtkMeeting) can reuse the same best-effort tear-down logic.
+
+export const performTeardown = internalAction({
+  args: { streamId: v.id("streams"), userId: v.id("users"), cloudflareRoomId: v.string() },
+  handler: async (ctx, { streamId, userId, cloudflareRoomId }): Promise<void> => {
+    const broadcasts = await ctx.runQuery(api.streamBroadcasts.listForStream, { streamId })
+
+    for (const b of broadcasts) {
+      if (b.status !== "live" && b.status !== "degraded") continue
+
+      if (b.platform === "youtube" && b.externalBroadcastId) {
+        const ytConn = await ctx.runQuery(
+          internal.connectedPlatforms.getRawConnectionByUserAndPlatform,
+          { userId, platform: "youtube" },
+        )
+        if (ytConn) {
+          try {
+            await ctx.runAction(internal.youtubeBroadcasts.transitionBroadcast, {
+              connectionId: ytConn._id,
+              broadcastId: b.externalBroadcastId,
+              status: "complete",
+            })
+          } catch (e) {
+            console.warn("YouTube transition complete (best-effort):", e)
+          }
+        }
+      }
+
+      if (b.rtkRecordingId) {
+        try {
+          await ctx.runAction(internal.rtkRecordings.stopRecording, {
+            recordingId: b.rtkRecordingId,
+          })
+        } catch (e) {
+          console.warn("RealtimeKit stopRecording (best-effort):", e)
+        }
+      }
+
+      await ctx.runMutation(internal.streamBroadcasts.markEnded, { id: b._id })
+    }
+
+    // Stop the RealtimeKit livestream if a meeting id was provided.
+    if (cloudflareRoomId) {
+      const accountId = process.env.CLOUDFLARE_ACCOUNT_ID
+      const apiToken = process.env.CLOUDFLARE_API_TOKEN
+      const appId = process.env.CLOUDFLARE_REALTIMEKIT_APP_ID
+      if (accountId && apiToken && appId) {
+        const base = `https://api.cloudflare.com/client/v4/accounts/${accountId}/realtime/kit/${appId}`
+        try {
+          await fetch(`${base}/meetings/${cloudflareRoomId}/active-livestream/stop`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiToken}` },
+          })
+        } catch { /* best effort */ }
+      }
+    }
+  },
+})
+
 // ─── endLivestream ────────────────────────────────────────────────────────────
 
 export const endLivestream = action({
@@ -922,17 +983,18 @@ export const endLivestream = action({
     const appId = process.env.CLOUDFLARE_REALTIMEKIT_APP_ID
     if (!accountId || !apiToken || !appId) throw new Error("Cloudflare Realtime not configured")
 
-    const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/realtime/kit/${appId}`
+    await ctx.runAction(internal.streams.performTeardown, {
+      streamId,
+      userId,
+      cloudflareRoomId: session.cloudflareRoomId,
+    })
 
-    // Best-effort stop — swallow errors if there is no active livestream on Cloudflare
-    try {
-      await fetch(
-        `${baseUrl}/meetings/${session.cloudflareRoomId}/active-livestream/stop`,
-        { method: "POST", headers: { Authorization: `Bearer ${apiToken}` } },
-      )
-    } catch { /* no active stream on server */ }
+    await ctx.runMutation(api.streams.setStatus, {
+      id: streamId,
+      status: "ended",
+      endedAt: Date.now(),
+    })
 
-    await ctx.runMutation(api.streams.setStatus, { id: streamId, status: "ended", endedAt: Date.now() })
     await ctx.runMutation(internal.streams.attachBillingPlanToSession, {
       sessionId: session._id,
       billing: {
