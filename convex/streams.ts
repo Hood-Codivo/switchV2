@@ -1018,3 +1018,72 @@ export const endLivestream = action({
     })
   },
 })
+
+// ─── getSessionByRoomId ───────────────────────────────────────────────────────
+// Used by webhook handler to look up the session from a RealtimeKit meeting id.
+
+export const getSessionByRoomId = internalQuery({
+  args: { cloudflareRoomId: v.string() },
+  handler: async (ctx, { cloudflareRoomId }) => {
+    return ctx.db
+      .query("studioSessions")
+      .filter((q) => q.eq(q.field("cloudflareRoomId"), cloudflareRoomId))
+      .first()
+  },
+})
+
+// ─── getStreamById ────────────────────────────────────────────────────────────
+// Internal query to fetch a stream by id; used by webhook-triggered teardown.
+
+export const getStreamById = internalQuery({
+  args: { id: v.id("streams") },
+  handler: async (ctx, { id }) => {
+    return ctx.db.get(id)
+  },
+})
+
+// ─── teardownByRtkMeeting ─────────────────────────────────────────────────────
+// Called by the RealtimeKit `meeting.ended` webhook event. Finds the session,
+// guards against already-ended streams, delegates to performTeardown, then
+// marks the stream as ended.
+
+export const teardownByRtkMeeting = internalAction({
+  args: { cloudflareRoomId: v.string() },
+  handler: async (ctx, { cloudflareRoomId }): Promise<void> => {
+    const session = await ctx.runQuery(internal.streams.getSessionByRoomId, { cloudflareRoomId })
+    if (!session?.streamId) return
+    const stream = await ctx.runQuery(internal.streams.getStreamById, { id: session.streamId })
+    if (!stream || stream.status === "ended") return
+
+    await ctx.runAction(internal.streams.performTeardown, {
+      streamId: session.streamId,
+      userId: stream.creatorId,
+      cloudflareRoomId,
+    })
+    await ctx.runMutation(api.streams.setStatus, {
+      id: session.streamId,
+      status: "ended",
+      endedAt: Date.now(),
+    })
+  },
+})
+
+// ─── markSimulcastDegradedByRtkMeeting ───────────────────────────────────────
+// Called by the RealtimeKit `livestreaming.statusUpdate → OFFLINE` webhook event.
+// Marks all live broadcasts for the stream as degraded.
+
+export const markSimulcastDegradedByRtkMeeting = internalAction({
+  args: { cloudflareRoomId: v.string() },
+  handler: async (ctx, { cloudflareRoomId }): Promise<void> => {
+    const session = await ctx.runQuery(internal.streams.getSessionByRoomId, { cloudflareRoomId })
+    if (!session?.streamId) return
+    const broadcasts = await ctx.runQuery(api.streamBroadcasts.listForStream, {
+      streamId: session.streamId,
+    })
+    for (const b of broadcasts) {
+      if (b.status === "live") {
+        await ctx.runMutation(internal.streamBroadcasts.markDegraded, { id: b._id })
+      }
+    }
+  },
+})
