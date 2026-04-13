@@ -37,6 +37,7 @@ import { StudioLayoutCanvas } from "./studio-layout-canvas";
 import { GoLiveModal } from "./go-live-modal";
 import { StudioCommentsPanel } from "@/components/stream/stream-chat-panel";
 import { StreamHealthIndicator } from "./stream-health-indicator";
+import { SimulcastStatus } from "./simulcast-status";
 
 const solanaRpcUrl =
   process.env.NEXT_PUBLIC_SOLANA_RPC_URL ??
@@ -799,6 +800,11 @@ export function StudioConnected({
             </button>
           </div>
         </header>
+        {liveState === "live" && activeStream?.simulcastEnabled && activeStream._id && (
+          <div className="border-t border-zinc-800 px-4 py-1.5">
+            <SimulcastStatus streamId={activeStream._id} />
+          </div>
+        )}
       </div>
 
       {/* ── Middle: canvas + sidebar ─────────────────────────────────────── */}
