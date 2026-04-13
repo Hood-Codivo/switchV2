@@ -1,9 +1,10 @@
 import { convexTest } from "convex-test"
-import { expect, it, describe } from "vitest"
+import { expect, it, describe, vi, afterEach } from "vitest"
 import type { GenericMutationCtx } from "convex/server"
 import type { DataModel, Id } from "../_generated/dataModel"
 import { api } from "../_generated/api"
 import schema from "../schema"
+import { encrypt } from "../lib/tokenEncryption"
 
 const modules = import.meta.glob("../**/*.ts")
 
@@ -339,5 +340,287 @@ describe("streams.heartbeat", () => {
     await expect(
       t.withIdentity({ subject: "did:privy:test-alice" }).action(api.streams.heartbeat, {}),
     ).resolves.not.toThrow()
+  })
+})
+
+// ─── streams.goLive simulcast ─────────────────────────────────────────────────
+
+const TEST_ENCRYPTION_KEY = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+
+async function seedUserWithSession(
+  ctx: GenericMutationCtx<DataModel>,
+  username: string,
+) {
+  const userId = await ctx.db.insert("users", {
+    privyDid: `did:privy:test-${username}`,
+    walletAddress: `7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV${username}`,
+    username,
+    displayName: username,
+    bio: "",
+    avatarUrl: null,
+    pointsBalance: 0,
+    followerCount: 0,
+    createdAt: Date.now(),
+  })
+  const sessionId = await ctx.db.insert("studioSessions", {
+    creatorId: userId,
+    cloudflareRoomId: "cf-room-sim",
+    creatorAuthToken: "creator-token",
+    status: "active",
+    createdAt: Date.now(),
+    spendingLimitMinutes: 60,
+    allowExtraUsageSpending: true,
+    remainingApprovedMinutes: 60,
+  })
+  return { userId, sessionId }
+}
+
+async function seedYoutubeConnection(
+  ctx: GenericMutationCtx<DataModel>,
+  userId: Id<"users">,
+) {
+  // Token is fresh for 1 hour — refreshYoutubeToken will skip the fetch call
+  const accessToken = encrypt("ya29.test-access-token")
+  const refreshToken = encrypt("1//test-refresh-token")
+  return ctx.db.insert("connectedPlatforms", {
+    userId,
+    platform: "youtube",
+    accessToken,
+    refreshToken,
+    tokenExpiresAt: Date.now() + 3_600_000,
+    channelId: "UC-test",
+    channelTitle: "Test Channel",
+    displayName: "Test Channel",
+    connectedAt: Date.now(),
+    status: "active",
+  })
+}
+
+function stubEnvsForGoLive() {
+  vi.stubEnv("TOKEN_ENCRYPTION_KEY", TEST_ENCRYPTION_KEY)
+  vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "test-account")
+  vi.stubEnv("CLOUDFLARE_API_TOKEN", "test-cf-token")
+  vi.stubEnv("CLOUDFLARE_REALTIMEKIT_APP_ID", "test-app")
+  vi.stubEnv("GOOGLE_CLIENT_ID", "test-google-client")
+  vi.stubEnv("GOOGLE_CLIENT_SECRET", "test-google-secret")
+}
+
+/**
+ * Build a fetch mock that returns sequential responses from the provided list.
+ * Each call to fetch consumes the next response in the queue.
+ */
+function mockFetchSequence(
+  responses: Array<{ ok: boolean; status: number; body: unknown }>,
+) {
+  let idx = 0
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(() => {
+      const resp = responses[idx++] ?? { ok: false, status: 500, body: {} }
+      return Promise.resolve({
+        ok: resp.ok,
+        status: resp.status,
+        json: async () => resp.body,
+        text: async () => JSON.stringify(resp.body),
+      })
+    }),
+  )
+}
+
+describe("streams.goLive simulcast", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("happy path: creates streamBroadcast and transitions to live", async () => {
+    const t = convexTest(schema, modules)
+    stubEnvsForGoLive()
+
+    const { userId } = await t.run(async (ctx) => seedUserWithSession(ctx, "streamer"))
+    await t.run(async (ctx) => seedYoutubeConnection(ctx, userId))
+
+    // Fetch responses in order:
+    // 1. RTK /livestreams POST (main HLS stream)
+    // 2. YouTube liveBroadcasts.insert
+    // 3. YouTube liveStreams.insert
+    // 4. YouTube liveBroadcasts.bind
+    // 5. RTK /recordings POST
+    // 6. YouTube liveBroadcasts.transition → live
+    mockFetchSequence([
+      {
+        ok: true,
+        status: 200,
+        body: { data: { playback_url: "https://cf.example.com/manifest.m3u8" } },
+      },
+      {
+        ok: true,
+        status: 200,
+        body: { id: "yt-b" },
+      },
+      {
+        ok: true,
+        status: 200,
+        body: {
+          id: "yt-s",
+          cdn: { ingestionInfo: { ingestionAddress: "rtmp://a.rtmp.youtube.com/live2", streamName: "abc-key" } },
+        },
+      },
+      {
+        ok: true,
+        status: 200,
+        body: { id: "yt-b" },
+      },
+      {
+        ok: true,
+        status: 201,
+        body: { data: { id: "rec-1" } },
+      },
+      {
+        ok: true,
+        status: 200,
+        body: { id: "yt-b", status: { lifeCycleStatus: "live" } },
+      },
+    ])
+
+    const result = await t
+      .withIdentity({ subject: "did:privy:test-streamer" })
+      .action(api.streams.goLive, {
+        title: "My Simulcast Stream",
+        category: "Gaming",
+        simulcast: {
+          youtube: {
+            title: "My YouTube Stream",
+            description: "Streaming live!",
+            privacy: "public",
+          },
+        },
+      })
+
+    expect(result.streamId).toBeTruthy()
+
+    // Verify streamBroadcasts row
+    const broadcasts = await t.run(async (ctx) =>
+      ctx.db
+        .query("streamBroadcasts")
+        .withIndex("by_stream", (q) => q.eq("streamId", result.streamId as Id<"streams">))
+        .collect(),
+    )
+    expect(broadcasts).toHaveLength(1)
+    expect(broadcasts[0].status).toBe("live")
+    expect(broadcasts[0].externalBroadcastId).toBe("yt-b")
+    expect(broadcasts[0].rtkRecordingId).toBe("rec-1")
+
+    // Verify stream is live on Switched
+    const stream = await t.run(async (ctx) => ctx.db.get(result.streamId as Id<"streams">))
+    expect(stream?.status).toBe("live")
+    expect(stream?.playbackUrl).toBeTruthy()
+    expect(stream?.simulcastEnabled).toBe(true)
+  })
+
+  it("graceful-degrade: YouTube insert fails twice → broadcast=failed, stream stays live", async () => {
+    const t = convexTest(schema, modules)
+    stubEnvsForGoLive()
+
+    const { userId } = await t.run(async (ctx) => seedUserWithSession(ctx, "streamer2"))
+    await t.run(async (ctx) => seedYoutubeConnection(ctx, userId))
+
+    // Fetch responses:
+    // 1. RTK /livestreams POST → success (HLS stream)
+    // 2. YouTube liveBroadcasts.insert → 500 (first attempt)
+    // 3. YouTube liveBroadcasts.insert → 500 (retry after 200ms)
+    mockFetchSequence([
+      {
+        ok: true,
+        status: 200,
+        body: { data: { playback_url: "https://cf.example.com/manifest2.m3u8" } },
+      },
+      {
+        ok: false,
+        status: 500,
+        body: { error: { code: 500, message: "Internal Server Error" } },
+      },
+      {
+        ok: false,
+        status: 500,
+        body: { error: { code: 500, message: "Internal Server Error" } },
+      },
+    ])
+
+    const result = await t
+      .withIdentity({ subject: "did:privy:test-streamer2" })
+      .action(api.streams.goLive, {
+        title: "Stream With YouTube Failure",
+        category: "IRL",
+        simulcast: {
+          youtube: {
+            title: "YouTube Title",
+            description: "",
+            privacy: "unlisted",
+          },
+        },
+      })
+
+    expect(result.streamId).toBeTruthy()
+
+    // Broadcast row should be failed
+    const broadcasts = await t.run(async (ctx) =>
+      ctx.db
+        .query("streamBroadcasts")
+        .withIndex("by_stream", (q) => q.eq("streamId", result.streamId as Id<"streams">))
+        .collect(),
+    )
+    expect(broadcasts).toHaveLength(1)
+    expect(broadcasts[0].status).toBe("failed")
+
+    // Switched stream should still be live with a playback URL
+    const stream = await t.run(async (ctx) => ctx.db.get(result.streamId as Id<"streams">))
+    expect(stream?.status).toBe("live")
+    expect(stream?.playbackUrl).toBeTruthy()
+  })
+
+  it("no YouTube connection: broadcast=failed, stream goes live on Switched", async () => {
+    const t = convexTest(schema, modules)
+    stubEnvsForGoLive()
+
+    // Seed user with session but NO YouTube connection
+    await t.run(async (ctx) => seedUserWithSession(ctx, "streamer3"))
+
+    // Only RTK /livestreams POST needed — no YouTube calls happen
+    mockFetchSequence([
+      {
+        ok: true,
+        status: 200,
+        body: { data: { playback_url: "https://cf.example.com/manifest3.m3u8" } },
+      },
+    ])
+
+    const result = await t
+      .withIdentity({ subject: "did:privy:test-streamer3" })
+      .action(api.streams.goLive, {
+        title: "Stream Without YouTube",
+        category: "Tech",
+        simulcast: {
+          youtube: {
+            title: "YouTube Title",
+            description: "",
+            privacy: "private",
+          },
+        },
+      })
+
+    expect(result.streamId).toBeTruthy()
+
+    // Broadcast row should be failed with "not connected" message
+    const broadcasts = await t.run(async (ctx) =>
+      ctx.db
+        .query("streamBroadcasts")
+        .withIndex("by_stream", (q) => q.eq("streamId", result.streamId as Id<"streams">))
+        .collect(),
+    )
+    expect(broadcasts).toHaveLength(1)
+    expect(broadcasts[0].status).toBe("failed")
+    expect(broadcasts[0].errorMessage).toContain("not connected")
+
+    // Switched stream should be live
+    const stream = await t.run(async (ctx) => ctx.db.get(result.streamId as Id<"streams">))
+    expect(stream?.status).toBe("live")
   })
 })

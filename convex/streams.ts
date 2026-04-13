@@ -18,6 +18,30 @@ const streamSessionPlanValidator = v.object({
   overtimeMinutes: v.number(),
 })
 
+const simulcastArgValidator = v.optional(
+  v.object({
+    youtube: v.optional(
+      v.object({
+        title: v.string(),
+        description: v.string(),
+        privacy: v.union(v.literal("public"), v.literal("unlisted"), v.literal("private")),
+      }),
+    ),
+  }),
+)
+
+async function withRetryOnce<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  try {
+    return await fn()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (/invalid_credentials|quota_exceeded/.test(msg)) throw e
+    console.warn(`${label} failed once, retrying after 200ms: ${msg}`)
+    await new Promise((r) => setTimeout(r, 200))
+    return fn()
+  }
+}
+
 // ─── getActiveSessionForCreator ───────────────────────────────────────────────
 
 export const getActiveSessionForCreator = internalQuery({
@@ -629,8 +653,12 @@ export const goLive = action({
     title: v.string(),
     category: categoryValidator,
     sessionPlan: v.optional(streamSessionPlanValidator),
+    simulcast: simulcastArgValidator,
   },
-  handler: async (ctx, { title, category, sessionPlan: _sessionPlan }): Promise<{ streamId: string }> => {
+  handler: async (
+    ctx,
+    { title, category, sessionPlan: _sessionPlan, simulcast },
+  ): Promise<{ streamId: string }> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error("Not authenticated")
 
@@ -733,6 +761,82 @@ export const goLive = action({
         streamId,
       })
 
+      // ── Simulcast orchestration ──────────────────────────────────────────
+      if (simulcast?.youtube) {
+        await ctx.runMutation(api.streams.setSimulcastEnabled, { id: streamId, enabled: true })
+
+        const ytConnection = await ctx.runQuery(
+          internal.connectedPlatforms.getRawConnectionByUserAndPlatform,
+          { userId, platform: "youtube" },
+        )
+
+        const broadcastId = await ctx.runMutation(internal.streamBroadcasts.create, {
+          streamId,
+          platform: "youtube",
+          title: simulcast.youtube.title,
+          description: simulcast.youtube.description,
+          privacy: simulcast.youtube.privacy,
+        })
+
+        if (!ytConnection || ytConnection.status !== "active") {
+          await ctx.runMutation(internal.streamBroadcasts.markFailed, {
+            id: broadcastId,
+            errorMessage: "YouTube not connected or token expired",
+          })
+        } else {
+          try {
+            // 1. YouTube: create broadcast + stream + bind
+            const ytResult = await withRetryOnce(
+              () => ctx.runAction(internal.youtubeBroadcasts.createBroadcast, {
+                connectionId: ytConnection._id,
+                title: simulcast.youtube!.title,
+                description: simulcast.youtube!.description,
+                privacy: simulcast.youtube!.privacy,
+              }),
+              "youtube.createBroadcast",
+            )
+
+            // 2. RealtimeKit: start /recordings with rtmp_out_config
+            const rtmpUrlWithKey = `${ytResult.rtmpUrl}/${ytResult.streamKey}`
+            const recording = await withRetryOnce(
+              () => ctx.runAction(internal.rtkRecordings.startRtmpRecording, {
+                meetingId: session.cloudflareRoomId,
+                rtmpUrlWithKey,
+              }),
+              "rtk.startRtmpRecording",
+            )
+
+            await ctx.runMutation(internal.streamBroadcasts.attachExternals, {
+              id: broadcastId,
+              externalBroadcastId: ytResult.broadcastId,
+              externalStreamId: ytResult.streamId,
+              rtkRecordingId: recording.recordingId,
+            })
+
+            // 3. YouTube: transition broadcast → live
+            await withRetryOnce(
+              () => ctx.runAction(internal.youtubeBroadcasts.transitionBroadcast, {
+                connectionId: ytConnection._id,
+                broadcastId: ytResult.broadcastId,
+                status: "live",
+              }),
+              "youtube.transition-live",
+            )
+
+            await ctx.runMutation(internal.streamBroadcasts.markLive, { id: broadcastId })
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            console.error("YouTube simulcast failed, graceful-degrading:", msg)
+            await ctx.runMutation(internal.streamBroadcasts.markFailed, {
+              id: broadcastId,
+              errorMessage: msg,
+            })
+            // Do NOT rethrow — Switched stream stays live.
+          }
+        }
+      }
+      // ── End simulcast orchestration ──────────────────────────────────────
+
       // Fan out go-live notifications to all followers
       await ctx.runMutation(internal.notifications.fanOutGoLiveNotifications, {
         streamId,
@@ -748,6 +852,18 @@ export const goLive = action({
       await ctx.runMutation(api.streams.setStatus, { id: streamId, status: "ended", endedAt: Date.now() })
       throw err
     }
+  },
+})
+
+// ─── setSimulcastEnabled ─────────────────────────────────────────────────────
+// Marks a stream as having simulcast enabled. Called from the goLive action
+// via ctx.runMutation (requires a public mutation so api.streams.setSimulcastEnabled
+// is accessible from within actions).
+
+export const setSimulcastEnabled = mutation({
+  args: { id: v.id("streams"), enabled: v.boolean() },
+  handler: async (ctx, { id, enabled }) => {
+    await ctx.db.patch(id, { simulcastEnabled: enabled })
   },
 })
 
