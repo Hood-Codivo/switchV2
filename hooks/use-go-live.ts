@@ -36,6 +36,7 @@ export type YoutubeSimulcastOptions = {
 
 export type SimulcastOptions = {
   youtube?: YoutubeSimulcastOptions
+  x?: boolean
 }
 
 export type UseGoLiveReturn = {

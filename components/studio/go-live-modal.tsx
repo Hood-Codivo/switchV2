@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "convex/react";
-import { ChevronDown, Loader2, Youtube } from "lucide-react";
+import { ChevronDown, Loader2, Twitter, Youtube } from "lucide-react";
 import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -42,7 +42,7 @@ type GoLiveModalProps = {
     title: string,
     category: StreamCategory,
     sessionPlan: StreamSessionPlan,
-    simulcast?: { youtube?: YoutubeSimulcastPayload },
+    simulcast?: { youtube?: YoutubeSimulcastPayload; x?: boolean },
   ) => Promise<void>;
   isStarting: boolean;
 };
@@ -60,9 +60,12 @@ export function GoLiveModal({
   const [youtubeTitle, setYoutubeTitle] = useState("");
   const [youtubeDescription, setYoutubeDescription] = useState("");
   const [youtubePrivacy, setYoutubePrivacy] = useState<"public" | "unlisted" | "private">("public");
+  const [xEnabled, setXEnabled] = useState(false);
   const currentUser = useQuery(api.users.getCurrentUser, {});
   const connectedPlatforms = useQuery(api.connectedPlatforms.getConnectedPlatforms, {});
   const ytConnection = useQuery(api.connectedPlatforms.getPlatformByType, { platform: "youtube" });
+  const xConnection = useQuery(api.connectedPlatforms.getPlatformByType, { platform: "x" });
+  const xAvailable = xConnection?.status === "active";
 
   const youtubeConnection = connectedPlatforms?.find(
     (p) => p.platform === "youtube" && p.status === "active",
@@ -126,25 +129,33 @@ export function GoLiveModal({
           window.open("/dashboard/settings/stream?reconnect=youtube", "_blank");
           return;
         }
-        await onConfirm(streamTitle, category, sessionPlan);
+        await onConfirm(
+          streamTitle,
+          category,
+          sessionPlan,
+          xEnabled && xAvailable ? { x: true } : undefined,
+        );
         return;
       }
     }
 
-    await onConfirm(
-      streamTitle,
-      category,
-      sessionPlan,
-      youtubeEnabled
+    const simulcast =
+      (youtubeEnabled && ytConnection?.status === "active") ||
+      (xEnabled && xAvailable)
         ? {
-            youtube: {
-              title: youtubeTitle || streamTitle,
-              description: youtubeDescription,
-              privacy: youtubePrivacy,
-            },
+            youtube:
+              youtubeEnabled && ytConnection?.status === "active"
+                ? {
+                    title: youtubeTitle || streamTitle,
+                    description: youtubeDescription,
+                    privacy: youtubePrivacy,
+                  }
+                : undefined,
+            x: xEnabled && xAvailable ? true : undefined,
           }
-        : undefined,
-    );
+        : undefined;
+
+    await onConfirm(streamTitle, category, sessionPlan, simulcast);
   }
 
   return (
@@ -359,6 +370,36 @@ export function GoLiveModal({
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* X — toggle if connected, CTA if not */}
+            {xAvailable ? (
+              <div className="flex items-center justify-between rounded-lg bg-zinc-800/50 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <Twitter className="size-4 text-zinc-300" />
+                  <span className="text-sm text-zinc-300">
+                    {xConnection?.channelTitle ?? "X (Twitter)"}
+                  </span>
+                </div>
+                <Switch
+                  checked={xEnabled}
+                  onCheckedChange={setXEnabled}
+                  disabled={isStarting}
+                />
+              </div>
+            ) : (
+              <div className="flex items-center justify-between rounded-lg bg-zinc-800/50 px-3 py-2 opacity-50">
+                <div className="flex items-center gap-2">
+                  <Twitter className="size-4 text-zinc-500" />
+                  <span className="text-sm text-zinc-500">X (Twitter)</span>
+                </div>
+                <Link
+                  href="/dashboard/settings/stream"
+                  className="text-xs text-zinc-400 transition-colors hover:text-zinc-200"
+                >
+                  Connect X →
+                </Link>
               </div>
             )}
 
