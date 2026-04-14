@@ -10,7 +10,8 @@ Video flows RealtimeKit meeting → RealtimeKit livestream (pushed via RTMP to a
 **Tech Stack:** Convex (actions, mutations, HTTP actions, crons), Cloudflare Stream REST API, YouTube Data API v3 (liveBroadcasts, liveStreams), RealtimeKit REST + webhooks, Next.js / React UI, existing AES-256-GCM token encryption in `convex/lib/tokenEncryption.ts`.
 
 **Decisions locked in** (from design conversation 2026-04-12/13):
-- Option A (RealtimeKit → Stream Live Input → Simulcast Outputs)
+- **Option A BLOCKED on 2026-04-12**: RealtimeKit livestream POST rejects `destinations` field — response: `422 {"message":"[body] \"destinations\" is not allowed","success":false}`. External RTMP out is not supported by this API. Stop and pivot to Option B before continuing.
+- Option A (RealtimeKit → Stream Live Input → Simulcast Outputs) — BLOCKED, see above
 - Per-creator persistent Live Input
 - Per-broadcast YouTube lifecycle
 - 4a: confirm modal on OAuth failure

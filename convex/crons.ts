@@ -9,4 +9,10 @@ crons.interval(
   internal.streamViewers.pruneStaleViewers,
 )
 
+crons.interval(
+  "simulcast orphan cleanup",
+  { minutes: 5 },
+  internal.streams.cleanupOrphanBroadcasts,
+)
+
 export default crons
