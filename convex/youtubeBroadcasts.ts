@@ -100,8 +100,13 @@ export const createBroadcast = internalAction({
       },
     )
     if (!broadcastRes.ok) {
-      const body = (await broadcastRes.json().catch(() => ({}))) as unknown
-      throw new Error(`youtube.createBroadcast:${parseYoutubeError(body)}:${broadcastRes.status}`)
+      const bodyText = await broadcastRes.text().catch(() => "")
+      let parsed: unknown = {}
+      try { parsed = JSON.parse(bodyText) } catch { /* non-JSON body */ }
+      console.error("youtube.createBroadcast failed", broadcastRes.status, bodyText)
+      throw new Error(
+        `youtube.createBroadcast:${parseYoutubeError(parsed)}:${broadcastRes.status} — ${bodyText.slice(0, 500)}`,
+      )
     }
     const broadcast = (await broadcastRes.json()) as { id: string }
 
@@ -118,8 +123,13 @@ export const createBroadcast = internalAction({
       },
     )
     if (!streamRes.ok) {
-      const body = (await streamRes.json().catch(() => ({}))) as unknown
-      throw new Error(`youtube.createStream:${parseYoutubeError(body)}:${streamRes.status}`)
+      const bodyText = await streamRes.text().catch(() => "")
+      let parsed: unknown = {}
+      try { parsed = JSON.parse(bodyText) } catch { /* non-JSON body */ }
+      console.error("youtube.createStream failed", streamRes.status, bodyText)
+      throw new Error(
+        `youtube.createStream:${parseYoutubeError(parsed)}:${streamRes.status} — ${bodyText.slice(0, 500)}`,
+      )
     }
     const stream = (await streamRes.json()) as {
       id: string
@@ -133,8 +143,13 @@ export const createBroadcast = internalAction({
       { method: "POST" },
     )
     if (!bindRes.ok) {
-      const body = (await bindRes.json().catch(() => ({}))) as unknown
-      throw new Error(`youtube.bind:${parseYoutubeError(body)}:${bindRes.status}`)
+      const bodyText = await bindRes.text().catch(() => "")
+      let parsed: unknown = {}
+      try { parsed = JSON.parse(bodyText) } catch { /* non-JSON body */ }
+      console.error("youtube.bind failed", bindRes.status, bodyText)
+      throw new Error(
+        `youtube.bind:${parseYoutubeError(parsed)}:${bindRes.status} — ${bodyText.slice(0, 500)}`,
+      )
     }
 
     return {
