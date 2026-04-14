@@ -1,8 +1,8 @@
 # YouTube Simulcast — E2E manual test
 
 ## Prerequisites
-- `REALTIMEKIT_WEBHOOK_SECRET` set in Convex dashboard
 - RealtimeKit webhook subscribed to `meeting.ended` and `livestreaming.statusUpdate`, pointing at `https://<deployment>.convex.site/webhooks/rtk`
+- No shared secret required — RealtimeKit uses RSA public-key verification (public key fetched automatically from `https://api.realtime.cloudflare.com/.well-known/webhooks.json`)
 - YouTube account connected via `/dashboard/settings/stream`
 
 ## Happy path

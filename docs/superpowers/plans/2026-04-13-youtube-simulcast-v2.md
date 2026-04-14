@@ -65,11 +65,7 @@
 
 ## Pre-requisite env vars
 
-The only net-new env var is for webhook verification:
-
-```bash
-REALTIMEKIT_WEBHOOK_SECRET=...   # placeholder OK for now; real value obtained when webhook is subscribed in Task 6
-```
+No new env vars are needed. RealtimeKit uses RSA public-key verification for webhooks — the public key is fetched automatically from `https://api.realtime.cloudflare.com/.well-known/webhooks.json` and cached at module scope. No shared secret exists.
 
 No Cloudflare Stream vars are needed. `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_REALTIMEKIT_APP_ID`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_REDIRECT_URI` are already present.
 
@@ -1371,9 +1367,9 @@ export const markSimulcastDegradedByRtkMeeting = internalAction({
 })
 ```
 
-- [ ] **Step 6: Add env var**
+- [ ] **Step 6: No env var required**
 
-In Convex dashboard → Settings → Environment Variables, add `REALTIMEKIT_WEBHOOK_SECRET` (placeholder OK until you register the webhook).
+RealtimeKit uses RSA public-key verification — no shared secret exists. The public key is fetched automatically from `https://api.realtime.cloudflare.com/.well-known/webhooks.json` on the first webhook request and cached in the V8 isolate. No Convex environment variable is needed for webhook signature verification.
 
 - [ ] **Step 7: Run tests**
 
@@ -1748,8 +1744,8 @@ git commit -m "feat(ui): SimulcastStatus component with live banner and 60s kill
 # YouTube Simulcast — E2E manual test
 
 ## Prerequisites
-- `REALTIMEKIT_WEBHOOK_SECRET` set in Convex dashboard
 - RealtimeKit webhook subscribed to `meeting.ended` and `livestreaming.statusUpdate`, pointing at `https://<deployment>.convex.site/webhooks/rtk`
+- No shared secret required — RealtimeKit uses RSA public-key verification (public key auto-fetched from `https://api.realtime.cloudflare.com/.well-known/webhooks.json`)
 - YouTube account connected via `/dashboard/settings/stream`
 
 ## Happy path
