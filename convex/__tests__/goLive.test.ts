@@ -401,8 +401,26 @@ function stubEnvsForGoLive() {
   vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "test-account")
   vi.stubEnv("CLOUDFLARE_API_TOKEN", "test-cf-token")
   vi.stubEnv("CLOUDFLARE_REALTIMEKIT_APP_ID", "test-app")
+  vi.stubEnv("CLOUDFLARE_STREAM_API_TOKEN", "test-stream-token")
   vi.stubEnv("GOOGLE_CLIENT_ID", "test-google-client")
   vi.stubEnv("GOOGLE_CLIENT_SECRET", "test-google-secret")
+}
+
+// Cloudflare Stream Live Input response (createLiveInput)
+const MOCK_LIVE_INPUT_RESPONSE = {
+  ok: true,
+  status: 200,
+  body: {
+    result: {
+      uid: "li-test",
+      rtmps: { url: "rtmps://live.cloudflare.com:443/live/", streamKey: "cf-stream-key" },
+    },
+  },
+}
+
+// Cloudflare Stream Live Output response (createSimulcastOutput)
+function mockLiveOutputResponse(uid: string) {
+  return { ok: true, status: 200, body: { result: { uid } } }
 }
 
 /**
@@ -437,18 +455,26 @@ describe("streams.goLive simulcast", () => {
     const { userId } = await t.run(async (ctx) => seedUserWithSession(ctx, "streamer"))
     await t.run(async (ctx) => seedYoutubeConnection(ctx, userId))
 
-    // Fetch responses in order:
+    // Fetch responses in order (v3 flow):
     // 1. RTK /livestreams POST (main HLS stream)
-    // 2. YouTube liveBroadcasts.insert
-    // 3. YouTube liveStreams.insert
-    // 4. YouTube liveBroadcasts.bind
-    // 5. RTK /recordings POST
-    // 6. YouTube liveBroadcasts.transition → live
+    // 2. Cloudflare Stream /live_inputs POST (ensureLiveInput — first-time creator)
+    // 3. RTK /recordings POST (pointing at Live Input)
+    // 4. YouTube liveBroadcasts.insert
+    // 5. YouTube liveStreams.insert
+    // 6. YouTube liveBroadcasts.bind
+    // 7. Cloudflare Stream /live_inputs/:uid/outputs POST (YouTube Live Output)
+    // 8. YouTube liveBroadcasts.transition → live
     mockFetchSequence([
       {
         ok: true,
         status: 200,
         body: { data: { playback_url: "https://cf.example.com/manifest.m3u8" } },
+      },
+      MOCK_LIVE_INPUT_RESPONSE,
+      {
+        ok: true,
+        status: 201,
+        body: { data: { id: "rec-1" } },
       },
       {
         ok: true,
@@ -468,11 +494,7 @@ describe("streams.goLive simulcast", () => {
         status: 200,
         body: { id: "yt-b" },
       },
-      {
-        ok: true,
-        status: 201,
-        body: { data: { id: "rec-1" } },
-      },
+      mockLiveOutputResponse("lo-yt-1"),
       {
         ok: true,
         status: 200,
@@ -507,6 +529,7 @@ describe("streams.goLive simulcast", () => {
     expect(broadcasts[0].status).toBe("live")
     expect(broadcasts[0].externalBroadcastId).toBe("yt-b")
     expect(broadcasts[0].rtkRecordingId).toBe("rec-1")
+    expect(broadcasts[0].cloudflareLiveOutputUid).toBe("lo-yt-1")
 
     // Verify stream is live on Switched
     const stream = await t.run(async (ctx) => ctx.db.get(result.streamId as Id<"streams">))
@@ -522,15 +545,23 @@ describe("streams.goLive simulcast", () => {
     const { userId } = await t.run(async (ctx) => seedUserWithSession(ctx, "streamer2"))
     await t.run(async (ctx) => seedYoutubeConnection(ctx, userId))
 
-    // Fetch responses:
+    // Fetch responses (v3 flow):
     // 1. RTK /livestreams POST → success (HLS stream)
-    // 2. YouTube liveBroadcasts.insert → 500 (first attempt)
-    // 3. YouTube liveBroadcasts.insert → 500 (retry after 200ms)
+    // 2. Cloudflare Stream /live_inputs POST → success (ensureLiveInput)
+    // 3. RTK /recordings POST → success
+    // 4. YouTube liveBroadcasts.insert → 500 (first attempt)
+    // 5. YouTube liveBroadcasts.insert → 500 (retry after 200ms)
     mockFetchSequence([
       {
         ok: true,
         status: 200,
         body: { data: { playback_url: "https://cf.example.com/manifest2.m3u8" } },
+      },
+      MOCK_LIVE_INPUT_RESPONSE,
+      {
+        ok: true,
+        status: 201,
+        body: { data: { id: "rec-2" } },
       },
       {
         ok: false,
@@ -583,12 +614,22 @@ describe("streams.goLive simulcast", () => {
     // Seed user with session but NO YouTube connection
     await t.run(async (ctx) => seedUserWithSession(ctx, "streamer3"))
 
-    // Only RTK /livestreams POST needed — no YouTube calls happen
+    // Fetch responses (v3 flow):
+    // 1. RTK /livestreams POST → success (HLS stream)
+    // 2. Cloudflare Stream /live_inputs POST → success (ensureLiveInput)
+    // 3. RTK /recordings POST → success
+    // No YouTube calls — connection check throws before any YouTube fetch
     mockFetchSequence([
       {
         ok: true,
         status: 200,
         body: { data: { playback_url: "https://cf.example.com/manifest3.m3u8" } },
+      },
+      MOCK_LIVE_INPUT_RESPONSE,
+      {
+        ok: true,
+        status: 201,
+        body: { data: { id: "rec-3" } },
       },
     ])
 
@@ -620,6 +661,206 @@ describe("streams.goLive simulcast", () => {
     expect(broadcasts[0].errorMessage).toContain("not connected")
 
     // Switched stream should be live
+    const stream = await t.run(async (ctx) => ctx.db.get(result.streamId as Id<"streams">))
+    expect(stream?.status).toBe("live")
+  })
+
+  it("goLive simulcasting to both YouTube + X creates two Live Outputs", async () => {
+    const t = convexTest(schema, modules)
+    stubEnvsForGoLive()
+
+    const { userId } = await t.run(async (ctx) => seedUserWithSession(ctx, "streamer4"))
+    await t.run(async (ctx) => seedYoutubeConnection(ctx, userId))
+
+    // Seed X connection with encrypted stream key
+    await t.run(async (ctx) => {
+      await ctx.db.insert("connectedPlatforms", {
+        userId,
+        platform: "x",
+        rtmpUrl: "rtmp://live.pscp.tv:80/x",
+        streamKey: encrypt("x-stream-key-secret"),
+        displayName: "X account",
+        connectedAt: Date.now(),
+        status: "active",
+      })
+    })
+
+    // Fetch responses (v3 flow):
+    // 1. RTK /livestreams POST
+    // 2. Cloudflare Stream /live_inputs POST (ensureLiveInput)
+    // 3. RTK /recordings POST
+    // 4. YouTube liveBroadcasts.insert
+    // 5. YouTube liveStreams.insert
+    // 6. YouTube liveBroadcasts.bind
+    // 7. Cloudflare Stream /outputs POST (YouTube Live Output)
+    // 8. YouTube liveBroadcasts.transition → live
+    // 9. Cloudflare Stream /outputs POST (X Live Output)
+    mockFetchSequence([
+      {
+        ok: true,
+        status: 200,
+        body: { data: { playback_url: "https://cf.example.com/manifest4.m3u8" } },
+      },
+      MOCK_LIVE_INPUT_RESPONSE,
+      {
+        ok: true,
+        status: 201,
+        body: { data: { id: "rec-4" } },
+      },
+      {
+        ok: true,
+        status: 200,
+        body: { id: "yt-b4" },
+      },
+      {
+        ok: true,
+        status: 200,
+        body: {
+          id: "yt-s4",
+          cdn: { ingestionInfo: { ingestionAddress: "rtmp://a.rtmp.youtube.com/live2", streamName: "yt-key-4" } },
+        },
+      },
+      {
+        ok: true,
+        status: 200,
+        body: { id: "yt-b4" },
+      },
+      mockLiveOutputResponse("lo-yt-4"),
+      {
+        ok: true,
+        status: 200,
+        body: { id: "yt-b4", status: { lifeCycleStatus: "live" } },
+      },
+      mockLiveOutputResponse("lo-x-4"),
+    ])
+
+    const result = await t
+      .withIdentity({ subject: "did:privy:test-streamer4" })
+      .action(api.streams.goLive, {
+        title: "Dual Simulcast Stream",
+        category: "Gaming",
+        simulcast: {
+          youtube: {
+            title: "YouTube Title",
+            description: "Live on YouTube",
+            privacy: "public",
+          },
+          x: true,
+        },
+      })
+
+    expect(result.streamId).toBeTruthy()
+
+    const broadcasts = await t.run(async (ctx) =>
+      ctx.db
+        .query("streamBroadcasts")
+        .withIndex("by_stream", (q) => q.eq("streamId", result.streamId as Id<"streams">))
+        .collect(),
+    )
+
+    expect(broadcasts).toHaveLength(2)
+
+    const ytBroadcast = broadcasts.find((b) => b.platform === "youtube")
+    const xBroadcast = broadcasts.find((b) => b.platform === "x")
+
+    expect(ytBroadcast?.status).toBe("live")
+    expect(ytBroadcast?.cloudflareLiveOutputUid).toBe("lo-yt-4")
+    expect(ytBroadcast?.externalBroadcastId).toBe("yt-b4")
+
+    expect(xBroadcast?.status).toBe("live")
+    expect(xBroadcast?.cloudflareLiveOutputUid).toBe("lo-x-4")
+
+    const stream = await t.run(async (ctx) => ctx.db.get(result.streamId as Id<"streams">))
+    expect(stream?.status).toBe("live")
+    expect(stream?.simulcastEnabled).toBe(true)
+  })
+
+  it("goLive: YouTube fails, X succeeds → stream goes live with X only", async () => {
+    const t = convexTest(schema, modules)
+    stubEnvsForGoLive()
+
+    const { userId } = await t.run(async (ctx) => seedUserWithSession(ctx, "streamer5"))
+    await t.run(async (ctx) => seedYoutubeConnection(ctx, userId))
+
+    // Seed X connection
+    await t.run(async (ctx) => {
+      await ctx.db.insert("connectedPlatforms", {
+        userId,
+        platform: "x",
+        rtmpUrl: "rtmp://live.pscp.tv:80/x",
+        streamKey: encrypt("x-stream-key-5"),
+        displayName: "X account",
+        connectedAt: Date.now(),
+        status: "active",
+      })
+    })
+
+    // Fetch responses (v3 flow):
+    // 1. RTK /livestreams POST
+    // 2. Cloudflare Stream /live_inputs POST (ensureLiveInput)
+    // 3. RTK /recordings POST
+    // 4. YouTube liveBroadcasts.insert → 500 (first attempt)
+    // 5. YouTube liveBroadcasts.insert → 500 (retry) — YouTube path fails
+    // 6. Cloudflare Stream /outputs POST (X Live Output succeeds)
+    mockFetchSequence([
+      {
+        ok: true,
+        status: 200,
+        body: { data: { playback_url: "https://cf.example.com/manifest5.m3u8" } },
+      },
+      MOCK_LIVE_INPUT_RESPONSE,
+      {
+        ok: true,
+        status: 201,
+        body: { data: { id: "rec-5" } },
+      },
+      {
+        ok: false,
+        status: 500,
+        body: { error: { code: 500, message: "Internal Server Error" } },
+      },
+      {
+        ok: false,
+        status: 500,
+        body: { error: { code: 500, message: "Internal Server Error" } },
+      },
+      mockLiveOutputResponse("lo-x-5"),
+    ])
+
+    const result = await t
+      .withIdentity({ subject: "did:privy:test-streamer5" })
+      .action(api.streams.goLive, {
+        title: "YouTube Fail X Succeed",
+        category: "Tech",
+        simulcast: {
+          youtube: {
+            title: "YouTube Title",
+            description: "",
+            privacy: "public",
+          },
+          x: true,
+        },
+      })
+
+    expect(result.streamId).toBeTruthy()
+
+    const broadcasts = await t.run(async (ctx) =>
+      ctx.db
+        .query("streamBroadcasts")
+        .withIndex("by_stream", (q) => q.eq("streamId", result.streamId as Id<"streams">))
+        .collect(),
+    )
+
+    expect(broadcasts).toHaveLength(2)
+
+    const ytBroadcast = broadcasts.find((b) => b.platform === "youtube")
+    const xBroadcast = broadcasts.find((b) => b.platform === "x")
+
+    expect(ytBroadcast?.status).toBe("failed")
+    expect(xBroadcast?.status).toBe("live")
+    expect(xBroadcast?.cloudflareLiveOutputUid).toBe("lo-x-5")
+
+    // Stream is still live on Switched
     const stream = await t.run(async (ctx) => ctx.db.get(result.streamId as Id<"streams">))
     expect(stream?.status).toBe("live")
   })

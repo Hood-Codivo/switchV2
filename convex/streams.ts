@@ -27,6 +27,7 @@ const simulcastArgValidator = v.optional(
         privacy: v.union(v.literal("public"), v.literal("unlisted"), v.literal("private")),
       }),
     ),
+    x: v.optional(v.boolean()),   // X has no per-broadcast metadata — just "on/off"
   }),
 )
 
@@ -761,81 +762,135 @@ export const goLive = action({
         streamId,
       })
 
-      // ── Simulcast orchestration ──────────────────────────────────────────
-      if (simulcast?.youtube) {
+      // ── Simulcast orchestration (v3: via Cloudflare Stream Live Input) ──
+      const destinations: Array<
+        | { kind: "youtube"; payload: { title: string; description: string; privacy: "public" | "unlisted" | "private" } }
+        | { kind: "x" }
+      > = []
+      if (simulcast?.youtube) destinations.push({ kind: "youtube", payload: simulcast.youtube })
+      if (simulcast?.x) destinations.push({ kind: "x" })
+
+      if (destinations.length > 0) {
         await ctx.runMutation(api.streams.setSimulcastEnabled, { id: streamId, enabled: true })
 
-        const ytConnection = await ctx.runQuery(
-          internal.connectedPlatforms.getRawConnectionByUserAndPlatform,
-          { userId, platform: "youtube" },
-        )
-
-        const broadcastId = await ctx.runMutation(internal.streamBroadcasts.create, {
-          streamId,
-          platform: "youtube",
-          title: simulcast.youtube.title,
-          description: simulcast.youtube.description,
-          privacy: simulcast.youtube.privacy,
+        // 1. Provision (or reuse) the per-creator Cloudflare Stream Live Input
+        const liveInput = await ctx.runAction(internal.cloudflareStream.ensureLiveInput, {
+          userId,
+          displayName: userRecord.username ?? "creator",
         })
+        const liveInputRtmpWithKey = `${liveInput.rtmpsUrl}${liveInput.streamKey}`
 
-        if (!ytConnection || ytConnection.status !== "active") {
-          await ctx.runMutation(internal.streamBroadcasts.markFailed, {
-            id: broadcastId,
-            errorMessage: "YouTube not connected or token expired",
-          })
-        } else {
-          try {
-            // 1. YouTube: create broadcast + stream + bind
-            const ytResult = await withRetryOnce(
-              () => ctx.runAction(internal.youtubeBroadcasts.createBroadcast, {
-                connectionId: ytConnection._id,
-                title: simulcast.youtube!.title,
-                description: simulcast.youtube!.description,
-                privacy: simulcast.youtube!.privacy,
-              }),
-              "youtube.createBroadcast",
-            )
+        // 2. Start RealtimeKit /recordings pointing at the Live Input
+        let recordingId: string | null = null
+        try {
+          const rec = await withRetryOnce(
+            () => ctx.runAction(internal.rtkRecordings.startRtmpRecording, {
+              meetingId: session.cloudflareRoomId,
+              rtmpUrlWithKey: liveInputRtmpWithKey,
+            }),
+            "rtk.startRtmpRecording",
+          )
+          recordingId = rec.recordingId
+        } catch (e) {
+          console.error("RealtimeKit /recordings failed, no simulcast this stream:", e)
+          // Stream stays live on Switched; no simulcast rows created.
+          recordingId = null
+        }
 
-            // 2. RealtimeKit: start /recordings with rtmp_out_config
-            const rtmpUrlWithKey = `${ytResult.rtmpUrl}/${ytResult.streamKey}`
-            const recording = await withRetryOnce(
-              () => ctx.runAction(internal.rtkRecordings.startRtmpRecording, {
-                meetingId: session.cloudflareRoomId,
-                rtmpUrlWithKey,
-              }),
-              "rtk.startRtmpRecording",
-            )
-
-            await ctx.runMutation(internal.streamBroadcasts.attachExternals, {
-              id: broadcastId,
-              externalBroadcastId: ytResult.broadcastId,
-              externalStreamId: ytResult.streamId,
-              rtkRecordingId: recording.recordingId,
+        if (recordingId !== null) {
+          // 3. Per-destination loop
+          for (const dest of destinations) {
+            const broadcastId = await ctx.runMutation(internal.streamBroadcasts.create, {
+              streamId,
+              platform: dest.kind,
+              title: dest.kind === "youtube" ? dest.payload.title : "",
+              description: dest.kind === "youtube" ? dest.payload.description : "",
+              privacy: dest.kind === "youtube" ? dest.payload.privacy : "public",
             })
 
-            // 3. YouTube: transition broadcast → live
-            await withRetryOnce(
-              () => ctx.runAction(internal.youtubeBroadcasts.transitionBroadcast, {
-                connectionId: ytConnection._id,
-                broadcastId: ytResult.broadcastId,
-                status: "live",
-              }),
-              "youtube.transition-live",
-            )
+            try {
+              if (dest.kind === "youtube") {
+                const ytConnection = await ctx.runQuery(
+                  internal.connectedPlatforms.getRawConnectionByUserAndPlatform,
+                  { userId, platform: "youtube" },
+                )
+                if (!ytConnection || ytConnection.status !== "active") {
+                  throw new Error("YouTube not connected or token expired")
+                }
+                const ytResult = await withRetryOnce(
+                  () => ctx.runAction(internal.youtubeBroadcasts.createBroadcast, {
+                    connectionId: ytConnection._id,
+                    title: dest.payload.title,
+                    description: dest.payload.description,
+                    privacy: dest.payload.privacy,
+                  }),
+                  "youtube.createBroadcast",
+                )
 
-            await ctx.runMutation(internal.streamBroadcasts.markLive, { id: broadcastId })
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e)
-            console.error("YouTube simulcast failed, graceful-degrading:", msg)
-            await ctx.runMutation(internal.streamBroadcasts.markFailed, {
-              id: broadcastId,
-              errorMessage: msg,
-            })
-            // Do NOT rethrow — Switched stream stays live.
+                const output = await withRetryOnce(
+                  () => ctx.runAction(internal.cloudflareStream.createSimulcastOutput, {
+                    liveInputUid: liveInput.liveInputUid,
+                    destinationUrl: ytResult.rtmpUrl,
+                    destinationStreamKey: ytResult.streamKey,
+                  }),
+                  "cf.createSimulcastOutput(youtube)",
+                )
+
+                await ctx.runMutation(internal.streamBroadcasts.attachExternals, {
+                  id: broadcastId,
+                  externalBroadcastId: ytResult.broadcastId,
+                  externalStreamId: ytResult.streamId,
+                  rtkRecordingId: recordingId,
+                  cloudflareLiveOutputUid: output.outputUid,
+                })
+
+                await withRetryOnce(
+                  () => ctx.runAction(internal.youtubeBroadcasts.transitionBroadcast, {
+                    connectionId: ytConnection._id,
+                    broadcastId: ytResult.broadcastId,
+                    status: "live",
+                  }),
+                  "youtube.transition-live",
+                )
+              } else {
+                // X (manual RTMP) — call action that decrypts credentials
+                const xCreds = await ctx.runAction(
+                  internal.connectedPlatformsActions.getXRtmpCredentials,
+                  { userId },
+                )
+                if (!xCreds) {
+                  throw new Error("X not connected")
+                }
+                const output = await withRetryOnce(
+                  () => ctx.runAction(internal.cloudflareStream.createSimulcastOutput, {
+                    liveInputUid: liveInput.liveInputUid,
+                    destinationUrl: xCreds.rtmpUrl,
+                    destinationStreamKey: xCreds.streamKey,
+                  }),
+                  "cf.createSimulcastOutput(x)",
+                )
+                await ctx.runMutation(internal.streamBroadcasts.attachExternals, {
+                  id: broadcastId,
+                  externalBroadcastId: "",             // X has no broadcast id
+                  externalStreamId: "",
+                  rtkRecordingId: recordingId,
+                  cloudflareLiveOutputUid: output.outputUid,
+                })
+              }
+
+              await ctx.runMutation(internal.streamBroadcasts.markLive, { id: broadcastId })
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              console.error(`${dest.kind} simulcast failed, marking failed:`, msg)
+              await ctx.runMutation(internal.streamBroadcasts.markFailed, {
+                id: broadcastId,
+                errorMessage: msg,
+              })
+            }
           }
         }
       }
-      // ── End simulcast orchestration ──────────────────────────────────────
+      // ── End simulcast orchestration (v3) ─────────────────────────────────
 
       // Fan out go-live notifications to all followers
       await ctx.runMutation(internal.notifications.fanOutGoLiveNotifications, {

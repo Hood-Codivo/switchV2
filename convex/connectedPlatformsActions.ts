@@ -1,7 +1,7 @@
 "use node"
 
 import { v } from "convex/values"
-import { action } from "./_generated/server"
+import { action, internalAction } from "./_generated/server"
 import { internal } from "./_generated/api"
 import { encrypt, decrypt, signState } from "./lib/tokenEncryption"
 
@@ -170,6 +170,21 @@ export const refreshYoutubeToken = action({
       accessToken: encryptedAccess,
       tokenExpiresAt: Date.now() + tokens.expires_in * 1000,
     })
+  },
+})
+
+export const getXRtmpCredentials = internalAction({
+  args: { userId: v.id("users") },
+  handler: async (ctx, { userId }): Promise<{ rtmpUrl: string; streamKey: string } | null> => {
+    const conn = await ctx.runQuery(
+      internal.connectedPlatforms.getRawConnectionByUserAndPlatform,
+      { userId, platform: "x" },
+    )
+    if (!conn?.rtmpUrl || !conn?.streamKey) return null
+    return {
+      rtmpUrl: conn.rtmpUrl,
+      streamKey: decrypt(conn.streamKey),
+    }
   },
 })
 

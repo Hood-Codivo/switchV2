@@ -32,6 +32,7 @@ export const attachExternals = internalMutation({
     externalBroadcastId: v.string(),
     externalStreamId: v.string(),
     rtkRecordingId: v.string(),
+    cloudflareLiveOutputUid: v.optional(v.string()),
   },
   handler: async (ctx, { id, ...rest }) => {
     await ctx.db.patch(id, rest)
