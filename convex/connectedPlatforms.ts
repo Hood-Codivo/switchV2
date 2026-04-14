@@ -145,3 +145,30 @@ export const getRawConnectionByUserAndPlatform = internalQuery({
       .first()
   },
 })
+
+export const storeXManualRtmp = internalMutation({
+  args: {
+    userId: v.id("users"),
+    rtmpUrl: v.string(),
+    streamKeyEncrypted: v.string(),
+    displayName: v.string(),
+    connectedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("connectedPlatforms")
+      .withIndex("by_user_and_platform", (q) => q.eq("userId", args.userId).eq("platform", "x"))
+      .first()
+    if (existing) await ctx.db.delete(existing._id)
+
+    return ctx.db.insert("connectedPlatforms", {
+      userId: args.userId,
+      platform: "x",
+      rtmpUrl: args.rtmpUrl,
+      streamKey: args.streamKeyEncrypted,
+      displayName: args.displayName,
+      connectedAt: args.connectedAt,
+      status: "active",
+    })
+  },
+})

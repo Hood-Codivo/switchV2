@@ -188,6 +188,35 @@ export const getXRtmpCredentials = internalAction({
   },
 })
 
+export const connectXDirectRtmp = action({
+  args: {
+    rtmpUrl: v.string(),
+    streamKey: v.string(),
+    displayName: v.optional(v.string()),
+  },
+  handler: async (ctx, { rtmpUrl, streamKey, displayName }) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error("Not authenticated")
+    const user = await ctx.runQuery(internal.connectedPlatforms.getUserByPrivyDid, {
+      privyDid: identity.subject,
+    })
+    if (!user) throw new Error("User not found")
+
+    if (!rtmpUrl.startsWith("rtmp://") && !rtmpUrl.startsWith("rtmps://")) {
+      throw new Error("RTMP URL must start with rtmp:// or rtmps://")
+    }
+    if (!streamKey.trim()) throw new Error("Stream key is required")
+
+    await ctx.runMutation(internal.connectedPlatforms.storeXManualRtmp, {
+      userId: user._id,
+      rtmpUrl,
+      streamKeyEncrypted: encrypt(streamKey.trim()),
+      displayName: displayName ?? "X account",
+      connectedAt: Date.now(),
+    })
+  },
+})
+
 export const disconnectPlatform = action({
   args: { platform: platformValidator },
   handler: async (ctx, { platform }) => {

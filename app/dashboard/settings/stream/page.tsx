@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Loader2, Check, Youtube, Unplug } from "lucide-react"
+import { ConnectXForm } from "@/components/dashboard/connect-x-form"
 
 export default function StreamSettingsPage() {
   const user = useQuery(api.users.getCurrentUser, {})
@@ -178,6 +179,8 @@ export default function StreamSettingsPage() {
             </Button>
           )}
         </div>
+
+        <ConnectXForm />
       </div>
 
       {/* ── Stream Preferences ──────────────────────────────────────────── */}
