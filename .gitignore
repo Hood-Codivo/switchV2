@@ -7,3 +7,6 @@ convex/_generated/
 
 .next
 tsconfig.tsbuildinfo
+
+# Git worktrees for parallel feature development
+.worktrees/

@@ -29,6 +29,7 @@ import type {
   GoLiveState,
   StreamHealth,
   StreamSessionPlan,
+  SimulcastOptions,
 } from "@/hooks/use-go-live";
 import type { StreamCategory } from "@/convex/schema";
 import { StudioBottomBar } from "./studio-bottom-bar";
@@ -36,6 +37,7 @@ import { StudioLayoutCanvas } from "./studio-layout-canvas";
 import { GoLiveModal } from "./go-live-modal";
 import { StudioCommentsPanel } from "@/components/stream/stream-chat-panel";
 import { StreamHealthIndicator } from "./stream-health-indicator";
+import { SimulcastStatus } from "./simulcast-status";
 
 const solanaRpcUrl =
   process.env.NEXT_PUBLIC_SOLANA_RPC_URL ??
@@ -517,6 +519,7 @@ type StudioConnectedProps = {
     title: string,
     category: StreamCategory,
     sessionPlan: StreamSessionPlan,
+    simulcast?: SimulcastOptions,
   ) => Promise<void>;
   onEndStream: () => Promise<void>;
   isHost: boolean;
@@ -797,6 +800,11 @@ export function StudioConnected({
             </button>
           </div>
         </header>
+        {liveState === "live" && activeStream?.simulcastEnabled && activeStream._id && (
+          <div className="border-t border-zinc-800 px-4 py-1.5">
+            <SimulcastStatus streamId={activeStream._id} />
+          </div>
+        )}
       </div>
 
       {/* ── Middle: canvas + sidebar ─────────────────────────────────────── */}
@@ -901,8 +909,8 @@ export function StudioConnected({
         <GoLiveModal
           open={modalOpen}
           onClose={() => setModalOpen(false)}
-          onConfirm={async (title, category, sessionPlan) => {
-            await onGoLive(title, category, sessionPlan);
+          onConfirm={async (title, category, sessionPlan, simulcast) => {
+            await onGoLive(title, category, sessionPlan, simulcast);
             setModalOpen(false);
           }}
           isStarting={liveState === "starting"}

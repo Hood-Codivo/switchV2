@@ -1,5 +1,5 @@
 import { v } from "convex/values"
-import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server"
+import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server"
 import { getAuthenticatedUser } from "./auth"
 import { api, internal } from "./_generated/api"
 import { categoryValidator, streamBillingStateValidator, streamStatusValidator } from "./schema"
@@ -17,6 +17,30 @@ const streamSessionPlanValidator = v.object({
   allowExtraUsageSpending: v.boolean(),
   overtimeMinutes: v.number(),
 })
+
+const simulcastArgValidator = v.optional(
+  v.object({
+    youtube: v.optional(
+      v.object({
+        title: v.string(),
+        description: v.string(),
+        privacy: v.union(v.literal("public"), v.literal("unlisted"), v.literal("private")),
+      }),
+    ),
+  }),
+)
+
+async function withRetryOnce<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  try {
+    return await fn()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (/invalid_credentials|quota_exceeded/.test(msg)) throw e
+    console.warn(`${label} failed once, retrying after 200ms: ${msg}`)
+    await new Promise((r) => setTimeout(r, 200))
+    return fn()
+  }
+}
 
 // ─── getActiveSessionForCreator ───────────────────────────────────────────────
 
@@ -629,8 +653,12 @@ export const goLive = action({
     title: v.string(),
     category: categoryValidator,
     sessionPlan: v.optional(streamSessionPlanValidator),
+    simulcast: simulcastArgValidator,
   },
-  handler: async (ctx, { title, category, sessionPlan: _sessionPlan }): Promise<{ streamId: string }> => {
+  handler: async (
+    ctx,
+    { title, category, sessionPlan: _sessionPlan, simulcast },
+  ): Promise<{ streamId: string }> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error("Not authenticated")
 
@@ -733,6 +761,82 @@ export const goLive = action({
         streamId,
       })
 
+      // ── Simulcast orchestration ──────────────────────────────────────────
+      if (simulcast?.youtube) {
+        await ctx.runMutation(api.streams.setSimulcastEnabled, { id: streamId, enabled: true })
+
+        const ytConnection = await ctx.runQuery(
+          internal.connectedPlatforms.getRawConnectionByUserAndPlatform,
+          { userId, platform: "youtube" },
+        )
+
+        const broadcastId = await ctx.runMutation(internal.streamBroadcasts.create, {
+          streamId,
+          platform: "youtube",
+          title: simulcast.youtube.title,
+          description: simulcast.youtube.description,
+          privacy: simulcast.youtube.privacy,
+        })
+
+        if (!ytConnection || ytConnection.status !== "active") {
+          await ctx.runMutation(internal.streamBroadcasts.markFailed, {
+            id: broadcastId,
+            errorMessage: "YouTube not connected or token expired",
+          })
+        } else {
+          try {
+            // 1. YouTube: create broadcast + stream + bind
+            const ytResult = await withRetryOnce(
+              () => ctx.runAction(internal.youtubeBroadcasts.createBroadcast, {
+                connectionId: ytConnection._id,
+                title: simulcast.youtube!.title,
+                description: simulcast.youtube!.description,
+                privacy: simulcast.youtube!.privacy,
+              }),
+              "youtube.createBroadcast",
+            )
+
+            // 2. RealtimeKit: start /recordings with rtmp_out_config
+            const rtmpUrlWithKey = `${ytResult.rtmpUrl}/${ytResult.streamKey}`
+            const recording = await withRetryOnce(
+              () => ctx.runAction(internal.rtkRecordings.startRtmpRecording, {
+                meetingId: session.cloudflareRoomId,
+                rtmpUrlWithKey,
+              }),
+              "rtk.startRtmpRecording",
+            )
+
+            await ctx.runMutation(internal.streamBroadcasts.attachExternals, {
+              id: broadcastId,
+              externalBroadcastId: ytResult.broadcastId,
+              externalStreamId: ytResult.streamId,
+              rtkRecordingId: recording.recordingId,
+            })
+
+            // 3. YouTube: transition broadcast → live
+            await withRetryOnce(
+              () => ctx.runAction(internal.youtubeBroadcasts.transitionBroadcast, {
+                connectionId: ytConnection._id,
+                broadcastId: ytResult.broadcastId,
+                status: "live",
+              }),
+              "youtube.transition-live",
+            )
+
+            await ctx.runMutation(internal.streamBroadcasts.markLive, { id: broadcastId })
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            console.error("YouTube simulcast failed, graceful-degrading:", msg)
+            await ctx.runMutation(internal.streamBroadcasts.markFailed, {
+              id: broadcastId,
+              errorMessage: msg,
+            })
+            // Do NOT rethrow — Switched stream stays live.
+          }
+        }
+      }
+      // ── End simulcast orchestration ──────────────────────────────────────
+
       // Fan out go-live notifications to all followers
       await ctx.runMutation(internal.notifications.fanOutGoLiveNotifications, {
         streamId,
@@ -748,6 +852,18 @@ export const goLive = action({
       await ctx.runMutation(api.streams.setStatus, { id: streamId, status: "ended", endedAt: Date.now() })
       throw err
     }
+  },
+})
+
+// ─── setSimulcastEnabled ─────────────────────────────────────────────────────
+// Marks a stream as having simulcast enabled. Called from the goLive action
+// via ctx.runMutation (requires a public mutation so api.streams.setSimulcastEnabled
+// is accessible from within actions).
+
+export const setSimulcastEnabled = mutation({
+  args: { id: v.id("streams"), enabled: v.boolean() },
+  handler: async (ctx, { id, enabled }) => {
+    await ctx.db.patch(id, { simulcastEnabled: enabled })
   },
 })
 
@@ -786,6 +902,67 @@ export const listPastStreams = query({
   },
 })
 
+// ─── performTeardown ─────────────────────────────────────────────────────────
+// Internal action extracted so both endLivestream and the Task-7 webhook handler
+// (teardownByRtkMeeting) can reuse the same best-effort tear-down logic.
+
+export const performTeardown = internalAction({
+  args: { streamId: v.id("streams"), userId: v.id("users"), cloudflareRoomId: v.string() },
+  handler: async (ctx, { streamId, userId, cloudflareRoomId }): Promise<void> => {
+    const broadcasts = await ctx.runQuery(api.streamBroadcasts.listForStream, { streamId })
+
+    for (const b of broadcasts) {
+      if (b.status !== "live" && b.status !== "degraded") continue
+
+      if (b.platform === "youtube" && b.externalBroadcastId) {
+        const ytConn = await ctx.runQuery(
+          internal.connectedPlatforms.getRawConnectionByUserAndPlatform,
+          { userId, platform: "youtube" },
+        )
+        if (ytConn) {
+          try {
+            await ctx.runAction(internal.youtubeBroadcasts.transitionBroadcast, {
+              connectionId: ytConn._id,
+              broadcastId: b.externalBroadcastId,
+              status: "complete",
+            })
+          } catch (e) {
+            console.warn("YouTube transition complete (best-effort):", e)
+          }
+        }
+      }
+
+      if (b.rtkRecordingId) {
+        try {
+          await ctx.runAction(internal.rtkRecordings.stopRecording, {
+            recordingId: b.rtkRecordingId,
+          })
+        } catch (e) {
+          console.warn("RealtimeKit stopRecording (best-effort):", e)
+        }
+      }
+
+      await ctx.runMutation(internal.streamBroadcasts.markEnded, { id: b._id })
+    }
+
+    // Stop the RealtimeKit livestream if a meeting id was provided.
+    if (cloudflareRoomId) {
+      const accountId = process.env.CLOUDFLARE_ACCOUNT_ID
+      const apiToken = process.env.CLOUDFLARE_API_TOKEN
+      const appId = process.env.CLOUDFLARE_REALTIMEKIT_APP_ID
+      if (accountId && apiToken && appId) {
+        const base = `https://api.cloudflare.com/client/v4/accounts/${accountId}/realtime/kit/${appId}`
+        try {
+          await fetch(`${base}/meetings/${cloudflareRoomId}/active-livestream/stop`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiToken}` },
+          })
+        } catch { /* best effort */ }
+      }
+    }
+  },
+})
+
 // ─── endLivestream ────────────────────────────────────────────────────────────
 
 export const endLivestream = action({
@@ -806,17 +983,18 @@ export const endLivestream = action({
     const appId = process.env.CLOUDFLARE_REALTIMEKIT_APP_ID
     if (!accountId || !apiToken || !appId) throw new Error("Cloudflare Realtime not configured")
 
-    const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/realtime/kit/${appId}`
+    await ctx.runAction(internal.streams.performTeardown, {
+      streamId,
+      userId,
+      cloudflareRoomId: session.cloudflareRoomId,
+    })
 
-    // Best-effort stop — swallow errors if there is no active livestream on Cloudflare
-    try {
-      await fetch(
-        `${baseUrl}/meetings/${session.cloudflareRoomId}/active-livestream/stop`,
-        { method: "POST", headers: { Authorization: `Bearer ${apiToken}` } },
-      )
-    } catch { /* no active stream on server */ }
+    await ctx.runMutation(api.streams.setStatus, {
+      id: streamId,
+      status: "ended",
+      endedAt: Date.now(),
+    })
 
-    await ctx.runMutation(api.streams.setStatus, { id: streamId, status: "ended", endedAt: Date.now() })
     await ctx.runMutation(internal.streams.attachBillingPlanToSession, {
       sessionId: session._id,
       billing: {
@@ -838,5 +1016,107 @@ export const endLivestream = action({
     await ctx.runMutation(internal.streams.clearStreamFromSession, {
       sessionId: session._id,
     })
+  },
+})
+
+// ─── getSessionByRoomId ───────────────────────────────────────────────────────
+// Used by webhook handler to look up the session from a RealtimeKit meeting id.
+
+export const getSessionByRoomId = internalQuery({
+  args: { cloudflareRoomId: v.string() },
+  handler: async (ctx, { cloudflareRoomId }) => {
+    return ctx.db
+      .query("studioSessions")
+      .filter((q) => q.eq(q.field("cloudflareRoomId"), cloudflareRoomId))
+      .first()
+  },
+})
+
+// ─── getStreamById ────────────────────────────────────────────────────────────
+// Internal query to fetch a stream by id; used by webhook-triggered teardown.
+
+export const getStreamById = internalQuery({
+  args: { id: v.id("streams") },
+  handler: async (ctx, { id }) => {
+    return ctx.db.get(id)
+  },
+})
+
+// ─── teardownByRtkMeeting ─────────────────────────────────────────────────────
+// Called by the RealtimeKit `meeting.ended` webhook event. Finds the session,
+// guards against already-ended streams, delegates to performTeardown, then
+// marks the stream as ended.
+
+export const teardownByRtkMeeting = internalAction({
+  args: { cloudflareRoomId: v.string() },
+  handler: async (ctx, { cloudflareRoomId }): Promise<void> => {
+    const session = await ctx.runQuery(internal.streams.getSessionByRoomId, { cloudflareRoomId })
+    if (!session?.streamId) return
+    const stream = await ctx.runQuery(internal.streams.getStreamById, { id: session.streamId })
+    if (!stream || stream.status === "ended") return
+
+    await ctx.runAction(internal.streams.performTeardown, {
+      streamId: session.streamId,
+      userId: stream.creatorId,
+      cloudflareRoomId,
+    })
+    await ctx.runMutation(api.streams.setStatus, {
+      id: session.streamId,
+      status: "ended",
+      endedAt: Date.now(),
+    })
+  },
+})
+
+// ─── cleanupOrphanBroadcasts ─────────────────────────────────────────────────
+// Safety cron (5 min) that sweeps active broadcasts and fixes any that are
+// orphaned: stream deleted, stream ended without simulcast teardown, or stuck
+// in degraded state for >10 minutes.
+
+export const cleanupOrphanBroadcasts = internalAction({
+  args: {},
+  handler: async (ctx): Promise<void> => {
+    const active = await ctx.runQuery(internal.streamBroadcasts.listActiveBroadcasts, {})
+    for (const b of active) {
+      const stream = await ctx.runQuery(internal.streams.getStreamById, { id: b.streamId })
+      if (!stream) {
+        await ctx.runMutation(internal.streamBroadcasts.markEnded, { id: b._id })
+        continue
+      }
+      if (stream.status === "ended") {
+        await ctx.runAction(internal.streams.performTeardown, {
+          streamId: stream._id,
+          userId: stream.creatorId,
+          cloudflareRoomId: "",
+        })
+        continue
+      }
+      if (b.status === "degraded" && b.degradedSince && Date.now() - b.degradedSince > 10 * 60_000) {
+        await ctx.runMutation(internal.streamBroadcasts.markFailed, {
+          id: b._id,
+          errorMessage: "simulcast degraded for >10m",
+        })
+      }
+    }
+  },
+})
+
+// ─── markSimulcastDegradedByRtkMeeting ───────────────────────────────────────
+// Called by the RealtimeKit `livestreaming.statusUpdate → OFFLINE` webhook event.
+// Marks all live broadcasts for the stream as degraded.
+
+export const markSimulcastDegradedByRtkMeeting = internalAction({
+  args: { cloudflareRoomId: v.string() },
+  handler: async (ctx, { cloudflareRoomId }): Promise<void> => {
+    const session = await ctx.runQuery(internal.streams.getSessionByRoomId, { cloudflareRoomId })
+    if (!session?.streamId) return
+    const broadcasts = await ctx.runQuery(api.streamBroadcasts.listForStream, {
+      streamId: session.streamId,
+    })
+    for (const b of broadcasts) {
+      if (b.status === "live") {
+        await ctx.runMutation(internal.streamBroadcasts.markDegraded, { id: b._id })
+      }
+    }
   },
 })
