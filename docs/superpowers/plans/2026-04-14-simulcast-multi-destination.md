@@ -84,6 +84,12 @@ CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN=customer-xxxxxxxx.cloudflarestream.com
 
 Both go in `.env.local` AND Convex dashboard. Token creation steps: developers.cloudflare.com/profile/api-tokens → Create Custom Token → Account > Stream > Edit → scope to your account → save token immediately.
 
+**Task 0 verification (2026-04-14):**
+- Accepted URL scheme: `rtmps`
+- Cloudflare Stream Live Input accepts RealtimeKit pushes: `yes` — POST /recordings returned 201 with status `INVOKED`
+- RealtimeKit recording status after POST: `INVOKED`
+- Note: `rtmp://` (plain, port 1935) was rejected with 422 — the Cloudflare Stream Live Input only exposes an `rtmps://` ingest URL; no plain `rtmp://` URL is returned at all. RealtimeKit validates the scheme but accepts `rtmps://` just fine.
+
 ---
 
 ## Task 0: Verify RTMPS push from RealtimeKit `/recordings` → Cloudflare Stream Live Input
@@ -96,7 +102,7 @@ Both go in `.env.local` AND Convex dashboard. Token creation steps: developers.c
 **Files:**
 - Create: `scripts/spike-rtk-to-stream.ts` (throwaway)
 
-- [ ] **Step 1: Write the script**
+- [x] **Step 1: Write the script**
 
 ```typescript
 // scripts/spike-rtk-to-stream.ts
@@ -184,13 +190,13 @@ async function main() {
 main().catch((e) => { console.error(e); process.exit(1) })
 ```
 
-- [ ] **Step 2: Run the spike, record which URL scheme is accepted**
+- [x] **Step 2: Run the spike, record which URL scheme is accepted**
 
 Expected outcome: **at least one** of the two rec calls returns 201. Record in the plan:
 - Which scheme (`rtmps://` or `rtmp://`)? → dictates Task 2's URL construction.
 - Does the recording transition to `IN_PROGRESS` or stay `INVOKED` without actual bytes? (Without a browser participant pushing data, it'll probably ERROR within 10s like v2's spike — that's fine, we only care that the HTTP call is accepted.)
 
-- [ ] **Step 3: Record findings**
+- [x] **Step 3: Record findings**
 
 Edit this plan file in the "Pre-requisite env vars" section and add:
 
@@ -201,13 +207,13 @@ Edit this plan file in the "Pre-requisite env vars" section and add:
 - RealtimeKit recording status after POST: `INVOKED | IN_PROGRESS`
 ```
 
-- [ ] **Step 4: Delete the script**
+- [x] **Step 4: Delete the script**
 
 ```bash
 rm scripts/spike-rtk-to-stream.ts
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/superpowers/plans/2026-04-14-simulcast-multi-destination.md
