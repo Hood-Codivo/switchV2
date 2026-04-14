@@ -966,6 +966,15 @@ export const performTeardown = internalAction({
   handler: async (ctx, { streamId, userId, cloudflareRoomId }): Promise<void> => {
     const broadcasts = await ctx.runQuery(api.streamBroadcasts.listForStream, { streamId })
 
+    // Look up the creator's Cloudflare Live Input so we can delete Live Outputs.
+    const creatorLiveInput = await ctx.runQuery(internal.creatorLiveInputs.getForUser, { userId })
+
+    // Collect unique recording ids to deduplicate stopRecording calls.
+    // In v3, a single RTK recording feeds multiple broadcast destinations, so we
+    // must stop each recording id exactly once regardless of how many broadcasts
+    // share it.
+    const stoppedRecordingIds = new Set<string>()
+
     for (const b of broadcasts) {
       if (b.status !== "live" && b.status !== "degraded") continue
 
@@ -987,7 +996,21 @@ export const performTeardown = internalAction({
         }
       }
 
-      if (b.rtkRecordingId) {
+      // Delete the Cloudflare Stream Live Output for this broadcast (best-effort).
+      if (b.cloudflareLiveOutputUid && creatorLiveInput) {
+        try {
+          await ctx.runAction(internal.cloudflareStream.removeSimulcastOutput, {
+            liveInputUid: creatorLiveInput.cloudflareLiveInputUid,
+            outputUid: b.cloudflareLiveOutputUid,
+          })
+        } catch (e) {
+          console.warn("Cloudflare deleteLiveOutput (best-effort):", e)
+        }
+      }
+
+      // Stop the RTK recording once per unique recording id.
+      if (b.rtkRecordingId && !stoppedRecordingIds.has(b.rtkRecordingId)) {
+        stoppedRecordingIds.add(b.rtkRecordingId)
         try {
           await ctx.runAction(internal.rtkRecordings.stopRecording, {
             recordingId: b.rtkRecordingId,

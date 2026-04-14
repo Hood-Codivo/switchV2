@@ -309,6 +309,7 @@ function stubEnvsForEnd() {
   vi.stubEnv("TOKEN_ENCRYPTION_KEY", TEST_ENCRYPTION_KEY_END)
   vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "test-account")
   vi.stubEnv("CLOUDFLARE_API_TOKEN", "test-cf-token")
+  vi.stubEnv("CLOUDFLARE_STREAM_API_TOKEN", "test-cf-stream-token")
   vi.stubEnv("CLOUDFLARE_REALTIMEKIT_APP_ID", "test-app")
   vi.stubEnv("GOOGLE_CLIENT_ID", "test-google-client")
   vi.stubEnv("GOOGLE_CLIENT_SECRET", "test-google-secret")
@@ -572,5 +573,91 @@ describe("streams.endLivestream simulcast tear-down", () => {
     // Stream should still be ended
     const stream = await t.run(async (ctx) => ctx.db.get(streamId as Id<"streams">))
     expect(stream?.status).toBe("ended")
+  })
+
+  it("performTeardown deletes Live Outputs + stops recording once for multiple broadcasts", async () => {
+    const t = convexTest(schema, modules)
+    stubEnvsForEnd()
+
+    const { userId, streamId } = await t.run(async (ctx) =>
+      seedUserWithLiveStream(ctx, "ender3"),
+    )
+    await t.run(async (ctx) => seedYoutubeConnectionForEnd(ctx, userId))
+
+    // Seed a creatorLiveInputs row so performTeardown can look up the liveInputUid
+    await t.run(async (ctx) => {
+      await ctx.db.insert("creatorLiveInputs", {
+        userId: userId as Id<"users">,
+        cloudflareLiveInputUid: "cf-live-input-uid",
+        rtmpsUrl: "rtmps://live.cloudflare.com/live/",
+        streamKeyEncrypted: encrypt("stream-key-enc"),
+        createdAt: Date.now(),
+        lastUsedAt: Date.now(),
+      })
+    })
+
+    // Two broadcasts sharing the same rtkRecordingId (v3 shared recording scenario)
+    await t.run(async (ctx) => {
+      await ctx.db.insert("streamBroadcasts", {
+        streamId: streamId as Id<"streams">,
+        platform: "youtube",
+        status: "live",
+        externalBroadcastId: "yt-b-multi",
+        externalStreamId: "yt-s-multi",
+        rtkRecordingId: "shared-rec-1",
+        cloudflareLiveOutputUid: "cf-output-yt",
+        createdAt: Date.now(),
+      })
+      await ctx.db.insert("streamBroadcasts", {
+        streamId: streamId as Id<"streams">,
+        platform: "x",
+        status: "live",
+        rtkRecordingId: "shared-rec-1",
+        cloudflareLiveOutputUid: "cf-output-x",
+        createdAt: Date.now(),
+      })
+    })
+
+    // Expected fetch sequence:
+    // 1. YouTube transitionBroadcast → complete (POST) — youtube broadcast only
+    // 2. Cloudflare deleteLiveOutput for youtube broadcast (DELETE)
+    // 3. RTK stopRecording — fired ONCE for shared-rec-1 (PUT)
+    // 4. Cloudflare deleteLiveOutput for x broadcast (DELETE)
+    // 5. RTK active-livestream/stop (POST)
+    const { calls } = mockFetchSequenceEnd([
+      { ok: true, status: 200, body: { id: "yt-b-multi", status: { lifeCycleStatus: "complete" } } }, // YouTube transition
+      { ok: true, status: 200, body: {} }, // CF deleteLiveOutput (youtube)
+      { ok: true, status: 200, body: {} }, // RTK stopRecording (once)
+      { ok: true, status: 200, body: {} }, // CF deleteLiveOutput (x)
+      { ok: true, status: 200, body: {} }, // RTK livestream stop
+    ])
+
+    await t
+      .withIdentity({ subject: "did:privy:test-ender3" })
+      .action(api.streams.endLivestream, { streamId: streamId as Id<"streams"> })
+
+    // Both broadcasts should be ended
+    const broadcasts = await t.run(async (ctx) =>
+      ctx.db
+        .query("streamBroadcasts")
+        .withIndex("by_stream", (q) => q.eq("streamId", streamId as Id<"streams">))
+        .collect(),
+    )
+    expect(broadcasts).toHaveLength(2)
+    expect(broadcasts.every((b) => b.status === "ended")).toBe(true)
+
+    // Stream should be ended
+    const stream = await t.run(async (ctx) => ctx.db.get(streamId as Id<"streams">))
+    expect(stream?.status).toBe("ended")
+
+    // Verify stopRecording was called exactly once (deduplicated)
+    const stopRecordingCalls = calls.filter((url) => url.includes("recordings/shared-rec-1"))
+    expect(stopRecordingCalls).toHaveLength(1)
+
+    // Verify both Live Outputs were deleted
+    const liveOutputCalls = calls.filter(
+      (url) => url.includes("cf-live-input-uid") && url.includes("outputs"),
+    )
+    expect(liveOutputCalls).toHaveLength(2)
   })
 })
