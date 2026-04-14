@@ -261,6 +261,16 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_user_and_platform", ["userId", "platform"]),
+  creatorLiveInputs: defineTable({
+    userId: v.id("users"),
+    cloudflareLiveInputUid: v.string(),
+    rtmpsUrl: v.string(),
+    streamKeyEncrypted: v.string(),           // AES-256-GCM
+    createdAt: v.number(),
+    lastUsedAt: v.optional(v.number()),
+  })
+    .index("by_user", ["userId"])
+    .index("by_cloudflare_uid", ["cloudflareLiveInputUid"]),
   streamBroadcasts: defineTable({
     streamId: v.id("streams"),
     platform: v.union(v.literal("youtube"), v.literal("x")),
@@ -279,6 +289,9 @@ export default defineSchema({
 
     // RealtimeKit recording id driving the RTMP push to the destination
     rtkRecordingId: v.optional(v.string()),
+
+    // Cloudflare Stream Live Output UID per destination
+    cloudflareLiveOutputUid: v.optional(v.string()),
 
     // Pre-broadcast metadata (user-supplied in go-live modal)
     title: v.optional(v.string()),
