@@ -10,3 +10,8 @@ tsconfig.tsbuildinfo
 
 # Git worktrees for parallel feature development
 .worktrees/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
