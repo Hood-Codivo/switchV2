@@ -4,6 +4,7 @@ import { v } from "convex/values"
 import { action } from "./_generated/server"
 import { api, internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
+import type { ActionCtx } from "./_generated/server"
 import {
   chargeApprovedSwtdBlockTransaction,
   prepareBuySwtdMeteoraSwapTransaction,
@@ -29,6 +30,16 @@ const streamSessionPlanValidator = v.object({
   overtimeMinutes: v.number(),
 })
 
+async function getTargetActiveSession(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  sessionId?: Id<"studioSessions">,
+) {
+  return sessionId
+    ? await ctx.runQuery(internal.streams.getSessionForCreator, { userId, sessionId })
+    : await ctx.runQuery(internal.streams.getActiveSessionForCreator, { userId })
+}
+
 export const prepareEnsurePlatformWallet = action({
   args: {},
   handler: async (ctx): Promise<Awaited<ReturnType<typeof preparePlatformWalletCreationTransaction>>> => {
@@ -49,11 +60,12 @@ export const prepareEnsurePlatformWallet = action({
 
 export const preparePrepaidSwtdCharge = action({
   args: {
+    sessionId: v.optional(v.id("studioSessions")),
     sessionPlan: v.optional(streamSessionPlanValidator),
   },
   handler: async (
     ctx,
-    { sessionPlan: _sessionPlan },
+    { sessionId, sessionPlan },
   ): Promise<Awaited<ReturnType<typeof prepareDirectSwtdChargeTransaction>>> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error("Not authenticated")
@@ -64,8 +76,15 @@ export const preparePrepaidSwtdCharge = action({
     } | null
     if (!userRecord?.walletAddress) throw new Error("Wallet setup incomplete")
 
-    const activeSession = await ctx.runQuery(internal.streams.getActiveSessionForCreator, {
+    const activeSession = await getTargetActiveSession(ctx, userRecord._id, sessionId)
+    console.info("[streams:approval] prepare requested", {
       userId: userRecord._id,
+      requestedSessionId: sessionId ?? null,
+      resolvedSessionId: activeSession?._id ?? null,
+      existingSpendingLimitMinutes: activeSession?.spendingLimitMinutes ?? 0,
+      existingRemainingApprovedMinutes: activeSession?.remainingApprovedMinutes ?? 0,
+      spendingApprovedAt: activeSession?.spendingApprovedAt ?? null,
+      requestedPlannedMinutes: sessionPlan?.plannedMinutes ?? null,
     })
     if (activeSession?.spendingApprovedAt) {
       const swtdBalance = await fetchWalletMintBalance(
@@ -73,6 +92,13 @@ export const preparePrepaidSwtdCharge = action({
         SWITCHED_TOKEN_MINT,
       )
       const coverage = getSwtdCoverage(Number(swtdBalance.uiAmountString ?? "0"))
+      console.info("[streams:approval] existing approval coverage", {
+        userId: userRecord._id,
+        sessionId: activeSession._id,
+        swtdBalance: coverage.swtdBalance,
+        chargeableMinutes: coverage.chargeableMinutes,
+        blockMinutes: coverage.blockMinutes,
+      })
       await ctx.runMutation(internal.streams.attachBillingPlanToSession, {
         sessionId: activeSession._id,
         billing: {
@@ -103,6 +129,14 @@ export const preparePrepaidSwtdCharge = action({
       SWITCHED_TOKEN_MINT,
     )
     const coverage = getSwtdCoverage(Number(swtdBalance.uiAmountString ?? "0"))
+    console.info("[streams:approval] wallet coverage", {
+      userId: userRecord._id,
+      sessionId: activeSession?._id ?? null,
+      swtdBalance: coverage.swtdBalance,
+      exactMinutes: coverage.exactMinutes,
+      chargeableMinutes: coverage.chargeableMinutes,
+      blockMinutes: coverage.blockMinutes,
+    })
     if (coverage.swtdBalance <= 0) {
       throw new Error("Insufficient $SWTD balance")
     }
@@ -120,11 +154,12 @@ export const preparePrepaidSwtdCharge = action({
 
 export const submitPrepaidSwtdCharge = action({
   args: {
+    sessionId: v.optional(v.id("studioSessions")),
     signedTransactionBase64: v.string(),
   },
   handler: async (
     ctx,
-    { signedTransactionBase64 },
+    { sessionId, signedTransactionBase64 },
   ): Promise<Awaited<ReturnType<typeof submitStreamSpendingApprovalTransaction>>> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error("Not authenticated")
@@ -141,8 +176,12 @@ export const submitPrepaidSwtdCharge = action({
       "streams:approval",
     )
 
-    const activeSession = await ctx.runQuery(internal.streams.getActiveSessionForCreator, {
+    const activeSession = await getTargetActiveSession(ctx, userRecord._id, sessionId)
+    console.info("[streams:approval] submit completed", {
       userId: userRecord._id,
+      requestedSessionId: sessionId ?? null,
+      resolvedSessionId: activeSession?._id ?? null,
+      signature: result.signature,
     })
     if (activeSession) {
       const swtdBalance = await fetchWalletMintBalance(
@@ -150,6 +189,14 @@ export const submitPrepaidSwtdCharge = action({
         SWITCHED_TOKEN_MINT,
       )
       const coverage = getSwtdCoverage(Number(swtdBalance.uiAmountString ?? "0"))
+      console.info("[streams:approval] submit coverage", {
+        userId: userRecord._id,
+        sessionId: activeSession._id,
+        swtdBalance: coverage.swtdBalance,
+        exactMinutes: coverage.exactMinutes,
+        chargeableMinutes: coverage.chargeableMinutes,
+        blockMinutes: coverage.blockMinutes,
+      })
       await ctx.runMutation(internal.streams.markPrepaidChargeOnSession, {
         sessionId: activeSession._id,
         signature: result.signature,

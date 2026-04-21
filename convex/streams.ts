@@ -43,6 +43,33 @@ async function withRetryOnce<T>(fn: () => Promise<T>, label: string): Promise<T>
   }
 }
 
+function getObjectKeys(value: unknown): string[] {
+  return value && typeof value === "object" ? Object.keys(value as Record<string, unknown>) : []
+}
+
+function summarizeUrl(value: string): Record<string, unknown> {
+  try {
+    const url = new URL(value)
+    return {
+      protocol: url.protocol,
+      host: url.host,
+      pathSegments: url.pathname.split("/").filter(Boolean).length,
+      length: value.length,
+      parseable: true,
+    }
+  } catch {
+    return {
+      startsWithRtmp: value.startsWith("rtmp://") || value.startsWith("rtmps://"),
+      length: value.length,
+      parseable: false,
+    }
+  }
+}
+
+function logGoLive(event: string, fields: Record<string, unknown> = {}) {
+  console.info(`[goLive] ${event}`, fields)
+}
+
 // ─── getActiveSessionForCreator ───────────────────────────────────────────────
 
 export const getActiveSessionForCreator = internalQuery({
@@ -52,6 +79,20 @@ export const getActiveSessionForCreator = internalQuery({
       .query("studioSessions")
       .withIndex("by_creator_and_status", (q) => q.eq("creatorId", userId).eq("status", "active"))
       .first()
+  },
+})
+
+export const getSessionForCreator = internalQuery({
+  args: {
+    userId: v.id("users"),
+    sessionId: v.id("studioSessions"),
+  },
+  handler: async (ctx, { userId, sessionId }) => {
+    const session = await ctx.db.get(sessionId)
+    if (!session || session.creatorId !== userId || session.status !== "active") {
+      return null
+    }
+    return session
   },
 })
 
@@ -653,12 +694,13 @@ export const goLive = action({
   args: {
     title: v.string(),
     category: categoryValidator,
+    sessionId: v.optional(v.id("studioSessions")),
     sessionPlan: v.optional(streamSessionPlanValidator),
     simulcast: simulcastArgValidator,
   },
   handler: async (
     ctx,
-    { title, category, sessionPlan: _sessionPlan, simulcast },
+    { title, category, sessionId, sessionPlan, simulcast },
   ): Promise<{ streamId: string }> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error("Not authenticated")
@@ -668,8 +710,24 @@ export const goLive = action({
     if (!userRecord) throw new Error("Complete your profile before going live")
     const userId = userRecord._id
 
-    const session = await ctx.runQuery(internal.streams.getActiveSessionForCreator, { userId })
+    const session = sessionId
+      ? await ctx.runQuery(internal.streams.getSessionForCreator, { userId, sessionId })
+      : await ctx.runQuery(internal.streams.getActiveSessionForCreator, { userId })
     if (!session) throw new Error("No active studio session — open the studio first")
+    logGoLive("request received", {
+      userId,
+      sessionId: session._id,
+      requestedSessionId: sessionId ?? null,
+      cloudflareRoomId: session.cloudflareRoomId,
+      category,
+      titleLength: title.length,
+      requestedPlannedMinutes: sessionPlan?.plannedMinutes ?? null,
+      youtubeRequested: Boolean(simulcast?.youtube),
+      xRequested: Boolean(simulcast?.x),
+      sessionSpendingLimitMinutes: session.spendingLimitMinutes ?? 0,
+      sessionRemainingApprovedMinutes: session.remainingApprovedMinutes ?? 0,
+      sessionSpendingApprovedAt: session.spendingApprovedAt ?? null,
+    })
     const billing = {
       spendingLimitMinutes: session.spendingLimitMinutes ?? 0,
       allowExtraUsageSpending: session.allowExtraUsageSpending ?? true,
@@ -688,6 +746,11 @@ export const goLive = action({
     if (billing.spendingLimitMinutes < CHARGE_BLOCK_MINUTES) {
       throw new Error("Need at least 30 minutes worth of $SWTD to go live")
     }
+    logGoLive("billing approved", {
+      streamMinutes: billing.spendingLimitMinutes,
+      remainingApprovedMinutes: billing.remainingApprovedMinutes,
+      chargeBlockMinutes: billing.chargeBlockMinutes,
+    })
 
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID
     const apiToken = process.env.CLOUDFLARE_API_TOKEN
@@ -704,6 +767,7 @@ export const goLive = action({
     // Create the stream record and mark it as starting
     const streamId = await ctx.runMutation(api.streams.create, { title, category })
     await ctx.runMutation(api.streams.setStatus, { id: streamId, status: "starting" })
+    logGoLive("stream record created", { streamId })
     await ctx.runMutation(internal.streams.attachBillingPlanToSession, {
       sessionId: session._id,
       billing,
@@ -715,6 +779,9 @@ export const goLive = action({
 
     try {
       // Start the HLS livestream on Cloudflare
+      logGoLive("rtk livestream start request", {
+        cloudflareRoomId: session.cloudflareRoomId,
+      })
       const startRes = await fetch(
         `${baseUrl}/meetings/${session.cloudflareRoomId}/livestreams`,
         { method: "POST", headers, body: JSON.stringify({}) },
@@ -727,12 +794,20 @@ export const goLive = action({
       // Log full response to diagnose field names — Cloudflare RTK uses { data: ... }
       // for POST but may use { result: ... } for GET. Parse defensively.
       const startBody = await startRes.json()
-      console.log("goLive: POST /livestreams response", JSON.stringify(startBody))
+      logGoLive("rtk livestream start response", {
+        status: startRes.status,
+        topLevelKeys: getObjectKeys(startBody),
+        dataKeys: getObjectKeys((startBody as Record<string, unknown>).data),
+        resultKeys: getObjectKeys((startBody as Record<string, unknown>).result),
+      })
 
       // Try both data.playback_url and result.playback_url in case the wrapper differs
       const startData = (startBody as Record<string, Record<string, unknown>>).data
         ?? (startBody as Record<string, Record<string, unknown>>).result
       let playbackUrl: string | null = (startData?.playback_url as string) ?? null
+      logGoLive("playback url initial check", {
+        playbackUrlPresent: Boolean(playbackUrl),
+      })
 
       if (!playbackUrl) {
         const deadline = Date.now() + 30_000
@@ -744,10 +819,19 @@ export const goLive = action({
           )
           if (pollRes.ok) {
             const pollBody = await pollRes.json()
-            console.log("goLive: GET /active-livestream poll", JSON.stringify(pollBody))
+            logGoLive("rtk active livestream poll", {
+              status: pollRes.status,
+              topLevelKeys: getObjectKeys(pollBody),
+              dataKeys: getObjectKeys((pollBody as Record<string, unknown>).data),
+              resultKeys: getObjectKeys((pollBody as Record<string, unknown>).result),
+            })
             const pollData = (pollBody as Record<string, Record<string, unknown>>).data
               ?? (pollBody as Record<string, Record<string, unknown>>).result
             playbackUrl = (pollData?.playback_url as string) ?? null
+          } else {
+            logGoLive("rtk active livestream poll failed", {
+              status: pollRes.status,
+            })
           }
         }
       }
@@ -761,6 +845,10 @@ export const goLive = action({
         sessionId: session._id,
         streamId,
       })
+      logGoLive("switched stream marked live", {
+        streamId,
+        playbackUrlPresent: true,
+      })
 
       // ── Simulcast orchestration (v3: via Cloudflare Stream Live Input) ──
       const destinations: Array<
@@ -769,20 +857,37 @@ export const goLive = action({
       > = []
       if (simulcast?.youtube) destinations.push({ kind: "youtube", payload: simulcast.youtube })
       if (simulcast?.x) destinations.push({ kind: "x" })
+      logGoLive("simulcast destinations resolved", {
+        destinations: destinations.map((destination) => destination.kind),
+      })
 
       if (destinations.length > 0) {
         await ctx.runMutation(api.streams.setSimulcastEnabled, { id: streamId, enabled: true })
 
         // 1. Provision (or reuse) the per-creator Cloudflare Stream Live Input
+        logGoLive("cloudflare live input ensure request", {
+          userId,
+          displayName: userRecord.username ?? "creator",
+        })
         const liveInput = await ctx.runAction(internal.cloudflareStream.ensureLiveInput, {
           userId,
           displayName: userRecord.username ?? "creator",
         })
         const liveInputRtmpWithKey = `${liveInput.rtmpsUrl}${liveInput.streamKey}`
+        logGoLive("cloudflare live input ready", {
+          liveInputUid: liveInput.liveInputUid,
+          ingestUrl: summarizeUrl(liveInput.rtmpsUrl),
+          streamKeyLength: liveInput.streamKey.length,
+          combinedIngestLength: liveInputRtmpWithKey.length,
+        })
 
         // 2. Start RealtimeKit /recordings pointing at the Live Input
         let recordingId: string | null = null
         try {
+          logGoLive("rtk recording start request", {
+            cloudflareRoomId: session.cloudflareRoomId,
+            destination: summarizeUrl(liveInput.rtmpsUrl),
+          })
           const rec = await withRetryOnce(
             () => ctx.runAction(internal.rtkRecordings.startRtmpRecording, {
               meetingId: session.cloudflareRoomId,
@@ -791,6 +896,28 @@ export const goLive = action({
             "rtk.startRtmpRecording",
           )
           recordingId = rec.recordingId
+          logGoLive("rtk recording started", {
+            recordingId,
+            liveInputUid: liveInput.liveInputUid,
+          })
+          if (process.env.SWITCHED_DEBUG_SIMULCAST_STATUS === "true") {
+            try {
+              const liveInputStatus = await ctx.runAction(internal.cloudflareStream.inspectLiveInput, {
+                liveInputUid: liveInput.liveInputUid,
+              })
+              logGoLive("cloudflare live input status after rtk start", {
+                liveInputUid: liveInput.liveInputUid,
+                status: liveInputStatus.status,
+              })
+            } catch (statusError) {
+              console.warn("[goLive] cloudflare live input status check failed", statusError)
+            }
+          } else {
+            logGoLive("cloudflare live input status probe skipped", {
+              liveInputUid: liveInput.liveInputUid,
+              enableWith: "SWITCHED_DEBUG_SIMULCAST_STATUS=true",
+            })
+          }
         } catch (e) {
           console.error("RealtimeKit /recordings failed, no simulcast this stream:", e)
           // Stream stays live on Switched; no simulcast rows created.
@@ -807,6 +934,12 @@ export const goLive = action({
               description: dest.kind === "youtube" ? dest.payload.description : "",
               privacy: dest.kind === "youtube" ? dest.payload.privacy : "public",
             })
+            logGoLive("simulcast broadcast created", {
+              broadcastId,
+              platform: dest.kind,
+              recordingId,
+              liveInputUid: liveInput.liveInputUid,
+            })
 
             try {
               if (dest.kind === "youtube") {
@@ -814,6 +947,11 @@ export const goLive = action({
                   internal.connectedPlatforms.getRawConnectionByUserAndPlatform,
                   { userId, platform: "youtube" },
                 )
+                logGoLive("youtube connection checked", {
+                  broadcastId,
+                  status: ytConnection?.status ?? "missing",
+                  hasAccessToken: Boolean(ytConnection?.accessToken),
+                })
                 if (!ytConnection || ytConnection.status !== "active") {
                   throw new Error("YouTube not connected or token expired")
                 }
@@ -826,6 +964,13 @@ export const goLive = action({
                   }),
                   "youtube.createBroadcast",
                 )
+                logGoLive("youtube broadcast created", {
+                  broadcastId,
+                  externalBroadcastId: ytResult.broadcastId,
+                  externalStreamId: ytResult.streamId,
+                  destination: summarizeUrl(ytResult.rtmpUrl),
+                  streamKeyLength: ytResult.streamKey.length,
+                })
 
                 const output = await withRetryOnce(
                   () => ctx.runAction(internal.cloudflareStream.createSimulcastOutput, {
@@ -835,6 +980,11 @@ export const goLive = action({
                   }),
                   "cf.createSimulcastOutput(youtube)",
                 )
+                logGoLive("youtube cloudflare output created", {
+                  broadcastId,
+                  outputUid: output.outputUid,
+                  liveInputUid: liveInput.liveInputUid,
+                })
 
                 await ctx.runMutation(internal.streamBroadcasts.attachExternals, {
                   id: broadcastId,
@@ -852,12 +1002,22 @@ export const goLive = action({
                   }),
                   "youtube.transition-live",
                 )
+                logGoLive("youtube broadcast transitioned live", {
+                  broadcastId,
+                  externalBroadcastId: ytResult.broadcastId,
+                })
               } else {
                 // X (manual RTMP) — call action that decrypts credentials
                 const xCreds = await ctx.runAction(
                   internal.connectedPlatformsActions.getXRtmpCredentials,
                   { userId },
                 )
+                logGoLive("x credentials checked", {
+                  broadcastId,
+                  connected: Boolean(xCreds),
+                  destination: xCreds ? summarizeUrl(xCreds.rtmpUrl) : null,
+                  streamKeyLength: xCreds?.streamKey.length ?? 0,
+                })
                 if (!xCreds) {
                   throw new Error("X not connected")
                 }
@@ -869,6 +1029,11 @@ export const goLive = action({
                   }),
                   "cf.createSimulcastOutput(x)",
                 )
+                logGoLive("x cloudflare output created", {
+                  broadcastId,
+                  outputUid: output.outputUid,
+                  liveInputUid: liveInput.liveInputUid,
+                })
                 await ctx.runMutation(internal.streamBroadcasts.attachExternals, {
                   id: broadcastId,
                   externalBroadcastId: "",             // X has no broadcast id
@@ -879,6 +1044,10 @@ export const goLive = action({
               }
 
               await ctx.runMutation(internal.streamBroadcasts.markLive, { id: broadcastId })
+              logGoLive("simulcast broadcast marked live", {
+                broadcastId,
+                platform: dest.kind,
+              })
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e)
               console.error(`${dest.kind} simulcast failed, marking failed:`, msg)

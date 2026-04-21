@@ -16,9 +16,36 @@ function rtkHeaders() {
   return { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" }
 }
 
+function getObjectKeys(value: unknown): string[] {
+  return value && typeof value === "object" ? Object.keys(value as Record<string, unknown>) : []
+}
+
+function summarizeUrl(value: string): Record<string, unknown> {
+  try {
+    const url = new URL(value)
+    return {
+      protocol: url.protocol,
+      host: url.host,
+      pathSegments: url.pathname.split("/").filter(Boolean).length,
+      length: value.length,
+      parseable: true,
+    }
+  } catch {
+    return {
+      startsWithRtmp: value.startsWith("rtmp://") || value.startsWith("rtmps://"),
+      length: value.length,
+      parseable: false,
+    }
+  }
+}
+
 export const startRtmpRecording = internalAction({
   args: { meetingId: v.string(), rtmpUrlWithKey: v.string() },
   handler: async (_ctx, { meetingId, rtmpUrlWithKey }): Promise<{ recordingId: string }> => {
+    console.info("[rtk-recordings] start request", {
+      meetingId,
+      destination: summarizeUrl(rtmpUrlWithKey),
+    })
     const res = await fetch(`${rtkBaseUrl()}/recordings`, {
       method: "POST",
       headers: rtkHeaders(),
@@ -29,12 +56,24 @@ export const startRtmpRecording = internalAction({
     })
     if (!res.ok) {
       const body = await res.text()
+      console.error("[rtk-recordings] start failed", {
+        meetingId,
+        status: res.status,
+        bodyLength: body.length,
+      })
       throw new Error(`rtk.startRtmpRecording failed: ${res.status} — ${body}`)
     }
     const json = (await res.json()) as Record<string, Record<string, unknown>>
     const payload = json.data ?? json.result
     const id = payload?.id as string | undefined
     if (!id) throw new Error(`rtk.startRtmpRecording: no id in ${JSON.stringify(json)}`)
+    console.info("[rtk-recordings] start response", {
+      meetingId,
+      status: res.status,
+      recordingId: id,
+      topLevelKeys: getObjectKeys(json),
+      payloadKeys: getObjectKeys(payload),
+    })
     return { recordingId: id }
   },
 })

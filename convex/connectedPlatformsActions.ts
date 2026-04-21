@@ -7,6 +7,25 @@ import { encrypt, decrypt, signState } from "./lib/tokenEncryption"
 
 const platformValidator = v.union(v.literal("youtube"), v.literal("x"))
 
+function summarizeUrl(value: string): Record<string, unknown> {
+  try {
+    const url = new URL(value)
+    return {
+      protocol: url.protocol,
+      host: url.host,
+      pathSegments: url.pathname.split("/").filter(Boolean).length,
+      length: value.length,
+      parseable: true,
+    }
+  } catch {
+    return {
+      startsWithRtmp: value.startsWith("rtmp://") || value.startsWith("rtmps://"),
+      length: value.length,
+      parseable: false,
+    }
+  }
+}
+
 // ─── Actions (external API calls) ───────────────────────────────────────────
 
 export const generateYoutubeAuthUrl = action({
@@ -180,10 +199,24 @@ export const getXRtmpCredentials = internalAction({
       internal.connectedPlatforms.getRawConnectionByUserAndPlatform,
       { userId, platform: "x" },
     )
+    console.info("[x-rtmp] credentials lookup", {
+      userId,
+      found: Boolean(conn),
+      hasRtmpUrl: Boolean(conn?.rtmpUrl),
+      hasStreamKey: Boolean(conn?.streamKey),
+      destination: conn?.rtmpUrl ? summarizeUrl(conn.rtmpUrl) : null,
+      encryptedStreamKeyLength: conn?.streamKey?.length ?? 0,
+    })
     if (!conn?.rtmpUrl || !conn?.streamKey) return null
+    const streamKey = decrypt(conn.streamKey)
+    console.info("[x-rtmp] credentials decrypted", {
+      userId,
+      destination: summarizeUrl(conn.rtmpUrl),
+      streamKeyLength: streamKey.length,
+    })
     return {
       rtmpUrl: conn.rtmpUrl,
-      streamKey: decrypt(conn.streamKey),
+      streamKey,
     }
   },
 })
@@ -206,6 +239,11 @@ export const connectXDirectRtmp = action({
       throw new Error("RTMP URL must start with rtmp:// or rtmps://")
     }
     if (!streamKey.trim()) throw new Error("Stream key is required")
+    console.info("[x-rtmp] storing credentials", {
+      userId: user._id,
+      destination: summarizeUrl(rtmpUrl),
+      streamKeyLength: streamKey.trim().length,
+    })
 
     await ctx.runMutation(internal.connectedPlatforms.storeXManualRtmp, {
       userId: user._id,

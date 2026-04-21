@@ -60,6 +60,13 @@ function encodeBytesToBase64(value: Uint8Array) {
   return btoa(String.fromCharCode(...value))
 }
 
+function getSimulcastDestinations(simulcast?: SimulcastOptions): string[] {
+  const destinations: string[] = []
+  if (simulcast?.youtube) destinations.push("youtube")
+  if (simulcast?.x) destinations.push("x")
+  return destinations
+}
+
 // ─── Health derivation ────────────────────────────────────────────────────────
 
 function deriveHealth(report: RTCStatsReport): StreamHealth {
@@ -148,6 +155,13 @@ export function useGoLive(
   const goLive = useCallback(
     async (title: string, category: StreamCategory, sessionPlan: StreamSessionPlan, simulcast?: SimulcastOptions) => {
       setLiveState("starting")
+      console.info("[go-live] starting", {
+        sessionId,
+        category,
+        titleLength: title.length,
+        destinations: getSimulcastDestinations(simulcast),
+        hasWalletAddress: Boolean(currentUser?.walletAddress),
+      })
       try {
         const walletAddress = currentUser?.walletAddress
         const embeddedWallet = walletAddress
@@ -159,6 +173,10 @@ export function useGoLive(
         }
 
         const prepareResult = await preparePlatformWalletAction({})
+        console.info("[go-live] platform wallet prepared", {
+          exists: prepareResult.exists,
+          needsSignature: Boolean(prepareResult.transactionBase64),
+        })
         if (!prepareResult.exists && prepareResult.transactionBase64) {
           const signedTransaction = await signTransaction({
             wallet: embeddedWallet,
@@ -171,7 +189,16 @@ export function useGoLive(
           })
         }
 
-        const prepaidChargeResult = await preparePrepaidSwtdChargeAction({ sessionPlan })
+        const prepaidChargeResult = await preparePrepaidSwtdChargeAction({
+          sessionId: sessionId ?? undefined,
+          sessionPlan,
+        })
+        console.info("[go-live] prepaid charge prepared", {
+          needsSignature: Boolean(prepaidChargeResult.transactionBase64),
+          plannedMinutes: sessionPlan.plannedMinutes,
+          allowExtraUsageSpending: sessionPlan.allowExtraUsageSpending,
+          overtimeMinutes: sessionPlan.overtimeMinutes,
+        })
         if (prepaidChargeResult.transactionBase64) {
           const signedTransaction = await signTransaction({
             wallet: embeddedWallet,
@@ -180,15 +207,27 @@ export function useGoLive(
           })
 
           await submitPrepaidSwtdChargeAction({
+            sessionId: sessionId ?? undefined,
             signedTransactionBase64: encodeBytesToBase64(signedTransaction.signedTransaction),
           })
         }
 
-        const { streamId } = await goLiveAction({ title, category, sessionPlan, simulcast })
+        const { streamId } = await goLiveAction({
+          title,
+          category,
+          sessionId: sessionId ?? undefined,
+          sessionPlan,
+          simulcast,
+        })
+        console.info("[go-live] backend action completed", {
+          streamId,
+          destinations: getSimulcastDestinations(simulcast),
+        })
         streamIdRef.current = streamId as Id<"streams">
         setLiveState("live")
         startHealthMonitoring()
       } catch (err) {
+        console.error("[go-live] failed", err)
         setLiveState("idle")
         streamIdRef.current = null
         throw err
@@ -199,6 +238,7 @@ export function useGoLive(
       goLiveAction,
       preparePrepaidSwtdChargeAction,
       preparePlatformWalletAction,
+      sessionId,
       signTransaction,
       solanaWallets,
       startHealthMonitoring,
