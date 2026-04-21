@@ -18,6 +18,7 @@
     "@cloudflare/realtimekit": "^1.2.5",
     "@cloudflare/realtimekit-react": "^1.2.5",
     "@cloudflare/realtimekit-react-ui": "^1.1.1",
+    "@cloudflare/realtimekit-virtual-background": "^0.0.2",
     "@hookform/resolvers": "^5.2.2",
     "@meteora-ag/cp-amm-sdk": "^1.4.1",
     "@meteora-ag/dynamic-bonding-curve-sdk": "^1.5.7",

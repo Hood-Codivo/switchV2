@@ -499,8 +499,14 @@ type StudioConnectedProps = {
   activeLayoutId: string;
   cameras: StudioDevice[];
   microphones: StudioDevice[];
+  backgroundBlurEnabled?: boolean;
+  backgroundBlurSupported?: boolean;
+  backgroundBlurLoading?: boolean;
+  backgroundBlurStrength?: number | null;
   toggleVideo: () => Promise<void>;
   toggleAudio: () => Promise<void>;
+  toggleBackgroundBlur?: () => Promise<void>;
+  setBackgroundBlurStrength?: (strength: number | null) => Promise<void>;
   switchCamera: (deviceId: string) => Promise<void>;
   switchMicrophone: (deviceId: string) => Promise<void>;
   toggleScreenShare: () => Promise<void>;
@@ -534,8 +540,14 @@ export function StudioConnected({
   activeLayoutId,
   cameras,
   microphones,
+  backgroundBlurEnabled,
+  backgroundBlurSupported,
+  backgroundBlurLoading,
+  backgroundBlurStrength,
   toggleVideo,
   toggleAudio,
+  toggleBackgroundBlur,
+  setBackgroundBlurStrength,
   switchCamera,
   switchMicrophone,
   toggleScreenShare,
@@ -896,8 +908,14 @@ export function StudioConnected({
         onCanvasSlots={onCanvasSlots}
         cameras={cameras}
         microphones={microphones}
+        backgroundBlurEnabled={backgroundBlurEnabled}
+        backgroundBlurSupported={backgroundBlurSupported}
+        backgroundBlurLoading={backgroundBlurLoading}
+        backgroundBlurStrength={backgroundBlurStrength}
         toggleVideo={toggleVideo}
         toggleAudio={toggleAudio}
+        toggleBackgroundBlur={toggleBackgroundBlur}
+        setBackgroundBlurStrength={setBackgroundBlurStrength}
         switchCamera={switchCamera}
         switchMicrophone={switchMicrophone}
         toggleScreenShare={toggleScreenShare}

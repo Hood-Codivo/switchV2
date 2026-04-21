@@ -5,6 +5,7 @@ import { useAction, useMutation, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { useRealtimeKitClient } from "@cloudflare/realtimekit-react"
 import type RTKClient from "@cloudflare/realtimekit"
+import RealtimeKitVideoBackgroundTransformer from "@cloudflare/realtimekit-virtual-background"
 import { STUDIO_LAYOUT_MAP, DEFAULT_LAYOUT_ID } from "@/lib/studio-layouts"
 import type { LayoutConfig } from "@/lib/studio-layouts"
 import { getOptimalLayout } from "@/lib/auto-layout"
@@ -44,6 +45,11 @@ export type StudioGuest = {
   rtkAuthToken?: string
 }
 
+type VideoMiddleware = ({ canvas }: { canvas: HTMLCanvasElement }) => Promise<void>
+type VideoBackgroundTransformer = Awaited<
+  ReturnType<typeof RealtimeKitVideoBackgroundTransformer.init>
+>
+
 export type UseStudioReturn = {
   status: StudioStatus
   error: string | null
@@ -55,8 +61,14 @@ export type UseStudioReturn = {
   activeLayoutId: string
   cameras: StudioDevice[]
   microphones: StudioDevice[]
+  backgroundBlurEnabled: boolean
+  backgroundBlurSupported: boolean
+  backgroundBlurLoading: boolean
+  backgroundBlurStrength: number | null
   toggleVideo: () => Promise<void>
   toggleAudio: () => Promise<void>
+  toggleBackgroundBlur: () => Promise<void>
+  setBackgroundBlurStrength: (strength: number | null) => Promise<void>
   switchCamera: (deviceId: string) => Promise<void>
   switchMicrophone: (deviceId: string) => Promise<void>
   toggleScreenShare: () => Promise<void>
@@ -127,6 +139,10 @@ export function useStudio(): UseStudioReturn {
   const [sources, setSources] = useState<StudioSource[]>([])
   const [onCanvasSlots, _setOnCanvasSlots] = useState<(StudioSource | null)[]>([null, null])
   const [activeLayoutId, _setActiveLayoutId] = useState(DEFAULT_LAYOUT_ID)
+  const [backgroundBlurEnabled, setBackgroundBlurEnabled] = useState(false)
+  const [backgroundBlurSupported, setBackgroundBlurSupported] = useState(false)
+  const [backgroundBlurLoading, setBackgroundBlurLoading] = useState(false)
+  const [backgroundBlurStrength, setBackgroundBlurStrengthState] = useState<number | null>(null)
 
   const [meeting, initMeeting] = useRealtimeKitClient()
 
@@ -144,6 +160,9 @@ export function useStudio(): UseStudioReturn {
   const autoLayoutDisabledRef = useRef(false)
   const sourceAddedAtRef = useRef<Map<string, number>>(new Map())
   const preScreenShareSnapshotRef = useRef<{ layoutId: string } | null>(null)
+  const backgroundTransformerRef = useRef<VideoBackgroundTransformer | null>(null)
+  const backgroundMiddlewareRef = useRef<VideoMiddleware | null>(null)
+  const backgroundBlurInFlightRef = useRef(false)
 
   const createSession = useAction(api.studio.createStudioSession)
   const billingHeartbeat = useAction(api.streams.heartbeat)
@@ -353,6 +372,55 @@ export function useStudio(): UseStudioReturn {
     )
   }, [])
 
+  const cleanupBackgroundBlur = useCallback(() => {
+    const client = rtkClientRef.current
+    const middleware = backgroundMiddlewareRef.current
+
+    if (client && middleware) {
+      try {
+        ;(client.self as unknown as {
+          removeVideoMiddleware?: (middleware: VideoMiddleware) => void
+        }).removeVideoMiddleware?.(middleware)
+      } catch {
+        // Best-effort cleanup; leaving the room releases the media pipeline too.
+      }
+    }
+
+    backgroundMiddlewareRef.current = null
+    setBackgroundBlurEnabled(false)
+    setBackgroundBlurStrengthState(null)
+    setBackgroundBlurLoading(false)
+
+    try {
+      backgroundTransformerRef.current?.destruct()
+    } catch {
+      // Ignore transformer teardown failures.
+    }
+    backgroundTransformerRef.current = null
+  }, [])
+
+  const initializeBackgroundTransformer = useCallback(async (client: RTKClient) => {
+    if (backgroundTransformerRef.current) return backgroundTransformerRef.current
+
+    await (client.self as unknown as {
+      setVideoMiddlewareGlobalConfig?: (config: {
+        disablePerFrameCanvasRendering: boolean
+      }) => Promise<void>
+    }).setVideoMiddlewareGlobalConfig?.({
+      disablePerFrameCanvasRendering: true,
+    })
+
+    backgroundTransformerRef.current =
+      await RealtimeKitVideoBackgroundTransformer.init({
+        meeting: client,
+        segmentationConfig: {
+          pipeline: "canvas2dCpu",
+        },
+      })
+
+    return backgroundTransformerRef.current
+  }, [])
+
   // ─── Session lifecycle ────────────────────────────────────────────────────
 
   // ─── RTK connection ───────────────────────────────────────────────────────
@@ -366,6 +434,7 @@ export function useStudio(): UseStudioReturn {
 
     rtkClientRef.current = client
     isActiveRef.current = true
+    setBackgroundBlurSupported(RealtimeKitVideoBackgroundTransformer.isSupported())
 
     /* eslint-disable @typescript-eslint/no-explicit-any */
     ;(client.self as any).on("videoUpdate", refreshSources)
@@ -419,6 +488,7 @@ export function useStudio(): UseStudioReturn {
         if (client.self.videoEnabled) await client.self.disableVideo()
         if (client.self.audioEnabled) await client.self.disableAudio()
         if (client.self.screenShareEnabled) await client.self.disableScreenShare()
+        cleanupBackgroundBlur()
         await client.leaveRoom()
       }
     } finally {
@@ -432,7 +502,7 @@ export function useStudio(): UseStudioReturn {
       hasAutoConnectedRef.current = false
       setStatus("idle")
     }
-  }, [endSessionAction, stopCompositorLoop, setOnCanvasSlots])
+  }, [cleanupBackgroundBlur, endSessionAction, stopCompositorLoop, setOnCanvasSlots])
 
   // Auto-reconnect when navigating to /studio/[sessionId] after a redirect from /studio.
   // The redirect unmounts StudioView (leaveRoom fires), then HostSessionView mounts fresh.
@@ -482,6 +552,69 @@ export function useStudio(): UseStudioReturn {
       await client.self.enableAudio()
     }
   }, [])
+
+  const setBackgroundBlurStrength = useCallback(async (strength: number | null) => {
+    const client = rtkClientRef.current
+    if (!isActiveRef.current || !client || !backgroundBlurSupported) return
+    if (backgroundBlurInFlightRef.current) return
+
+    const selfWithMiddleware = client.self as unknown as {
+      addVideoMiddleware?: (middleware: VideoMiddleware) => void
+      removeVideoMiddleware?: (middleware: VideoMiddleware) => void
+    }
+
+    backgroundBlurInFlightRef.current = true
+    setBackgroundBlurLoading(true)
+
+    if (strength === null && !backgroundMiddlewareRef.current) {
+      backgroundBlurInFlightRef.current = false
+      setBackgroundBlurLoading(false)
+      return
+    }
+
+    if (backgroundMiddlewareRef.current) {
+      try {
+        selfWithMiddleware.removeVideoMiddleware?.(backgroundMiddlewareRef.current)
+        backgroundMiddlewareRef.current = null
+        setBackgroundBlurEnabled(false)
+        setBackgroundBlurStrengthState(null)
+        refreshSources()
+      } finally {
+        if (strength === null) {
+          backgroundBlurInFlightRef.current = false
+          setBackgroundBlurLoading(false)
+        }
+      }
+      if (strength === null) return
+    }
+    if (strength === null) return
+
+    try {
+      if (!client.self.videoEnabled) {
+        await client.self.enableVideo()
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+
+      const transformer = await initializeBackgroundTransformer(client)
+      const middleware = await transformer.createBackgroundBlurVideoMiddleware(strength)
+      selfWithMiddleware.addVideoMiddleware?.(middleware)
+      backgroundMiddlewareRef.current = middleware
+      setBackgroundBlurEnabled(true)
+      setBackgroundBlurStrengthState(strength)
+      refreshSources()
+    } catch (err) {
+      console.warn("[studio] failed to toggle background blur", err)
+      cleanupBackgroundBlur()
+      setBackgroundBlurSupported(false)
+    } finally {
+      backgroundBlurInFlightRef.current = false
+      setBackgroundBlurLoading(false)
+    }
+  }, [backgroundBlurSupported, cleanupBackgroundBlur, initializeBackgroundTransformer, refreshSources])
+
+  const toggleBackgroundBlur = useCallback(async () => {
+    await setBackgroundBlurStrength(backgroundMiddlewareRef.current ? null : 50)
+  }, [setBackgroundBlurStrength])
 
   const switchCamera = useCallback(
     async (deviceId: string) => {
@@ -654,13 +787,14 @@ export function useStudio(): UseStudioReturn {
   useEffect(() => {
     return () => {
       if (isActiveRef.current && rtkClientRef.current) {
+        cleanupBackgroundBlur()
         void rtkClientRef.current.leaveRoom().catch(() => {})
         isActiveRef.current = false
         rtkClientRef.current = null
       }
       stopCompositorLoop()
     }
-  }, [stopCompositorLoop])
+  }, [cleanupBackgroundBlur, stopCompositorLoop])
 
   return {
     status,
@@ -673,8 +807,14 @@ export function useStudio(): UseStudioReturn {
     activeLayoutId,
     cameras,
     microphones,
+    backgroundBlurEnabled,
+    backgroundBlurSupported,
+    backgroundBlurLoading,
+    backgroundBlurStrength,
     toggleVideo,
     toggleAudio,
+    toggleBackgroundBlur,
+    setBackgroundBlurStrength,
     switchCamera,
     switchMicrophone,
     toggleScreenShare,
