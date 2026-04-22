@@ -78,8 +78,14 @@ export function HostSessionView() {
         activeLayoutId={studio.activeLayoutId}
         cameras={studio.cameras}
         microphones={studio.microphones}
+        backgroundBlurEnabled={studio.backgroundBlurEnabled}
+        backgroundBlurSupported={studio.backgroundBlurSupported}
+        backgroundBlurLoading={studio.backgroundBlurLoading}
+        backgroundBlurStrength={studio.backgroundBlurStrength}
         toggleVideo={studio.toggleVideo}
         toggleAudio={studio.toggleAudio}
+        toggleBackgroundBlur={studio.toggleBackgroundBlur}
+        setBackgroundBlurStrength={studio.setBackgroundBlurStrength}
         switchCamera={studio.switchCamera}
         switchMicrophone={studio.switchMicrophone}
         toggleScreenShare={studio.toggleScreenShare}

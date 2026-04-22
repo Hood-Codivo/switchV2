@@ -11,6 +11,7 @@ import {
   ChevronUp,
   UserPlus,
   Radio,
+  Sparkles,
 } from "lucide-react"
 import { useRealtimeKitSelector } from "@cloudflare/realtimekit-react"
 import { cn } from "@/lib/utils"
@@ -131,8 +132,14 @@ type StudioBottomBarProps = {
   onCanvasSlots: (StudioSource | null)[]
   cameras: StudioDevice[]
   microphones: StudioDevice[]
+  backgroundBlurEnabled?: boolean
+  backgroundBlurSupported?: boolean
+  backgroundBlurLoading?: boolean
+  backgroundBlurStrength?: number | null
   toggleVideo: () => Promise<void>
   toggleAudio: () => Promise<void>
+  toggleBackgroundBlur?: () => Promise<void>
+  setBackgroundBlurStrength?: (strength: number | null) => Promise<void>
   switchCamera: (deviceId: string) => Promise<void>
   switchMicrophone: (deviceId: string) => Promise<void>
   toggleScreenShare: () => Promise<void>
@@ -144,8 +151,14 @@ export function StudioBottomBar({
   onCanvasSlots,
   cameras,
   microphones,
+  backgroundBlurEnabled = false,
+  backgroundBlurSupported = false,
+  backgroundBlurLoading = false,
+  backgroundBlurStrength = null,
   toggleVideo,
   toggleAudio,
+  toggleBackgroundBlur,
+  setBackgroundBlurStrength,
   switchCamera,
   switchMicrophone,
   toggleScreenShare,
@@ -157,6 +170,7 @@ export function StudioBottomBar({
 
   const [showCameraMenu, setShowCameraMenu] = useState(false)
   const [showMicMenu, setShowMicMenu] = useState(false)
+  const [showBlurMenu, setShowBlurMenu] = useState(false)
 
   const onCanvasIds = new Set(onCanvasSlots.filter(Boolean).map((s) => s!.id))
 
@@ -199,6 +213,7 @@ export function StudioBottomBar({
               onClick={() => {
                 setShowMicMenu((v) => !v)
                 setShowCameraMenu(false)
+                setShowBlurMenu(false)
               }}
               className={cn(
                 "flex items-center justify-center rounded-r-full border-l px-2 py-2.5 transition-colors",
@@ -240,6 +255,7 @@ export function StudioBottomBar({
               onClick={() => {
                 setShowCameraMenu((v) => !v)
                 setShowMicMenu(false)
+                setShowBlurMenu(false)
               }}
               className={cn(
                 "flex items-center justify-center rounded-r-full border-l px-2 py-2.5 transition-colors",
@@ -261,6 +277,103 @@ export function StudioBottomBar({
                 onSelect={switchCamera}
                 onClose={() => setShowCameraMenu(false)}
               />
+            )}
+          </div>
+
+          {/* Background blur */}
+          <div className="relative">
+            <button
+              onClick={() => {
+                setShowBlurMenu((v) => !v)
+                setShowCameraMenu(false)
+                setShowMicMenu(false)
+              }}
+              disabled={
+                !toggleBackgroundBlur ||
+                !setBackgroundBlurStrength ||
+                !backgroundBlurSupported ||
+                backgroundBlurLoading
+              }
+              aria-expanded={showBlurMenu}
+              aria-haspopup="menu"
+              title={
+                backgroundBlurSupported
+                  ? "Choose background blur strength"
+                  : "Background blur is unavailable in this browser"
+              }
+              className={cn(
+                "flex min-h-10 items-center justify-center gap-2 rounded-full px-3.5 py-2.5 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900 disabled:cursor-not-allowed disabled:opacity-40",
+                backgroundBlurEnabled
+                  ? "bg-blue-600 text-white hover:bg-blue-700"
+                  : "bg-zinc-700 text-white hover:bg-zinc-600",
+              )}
+            >
+              <Sparkles className={cn("size-4", backgroundBlurLoading && "animate-pulse")} />
+              Background Blur
+            </button>
+            {showBlurMenu && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowBlurMenu(false)} />
+                <div className="absolute bottom-full left-0 z-20 mb-2 w-64 rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-2xl">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold text-zinc-100">Background Blur</p>
+                      <p className="text-[10px] text-zinc-500">Choose how much to blur.</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        void setBackgroundBlurStrength?.(null)
+                        setShowBlurMenu(false)
+                      }}
+                      disabled={!backgroundBlurEnabled || backgroundBlurLoading}
+                      className="rounded-full px-2.5 py-1 text-[10px] font-semibold text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Off
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2" role="menu" aria-label="Blur strength">
+                    {[
+                      { label: "Light", strength: 6, dots: ["size-1.5", "size-2", "size-2.5"] },
+                      { label: "Medium", strength: 12, dots: ["size-2", "size-2.5", "size-3"] },
+                      { label: "Strong", strength: 20, dots: ["size-2.5", "size-3", "size-3.5"] },
+                    ].map((option) => {
+                      const active = backgroundBlurStrength === option.strength
+                      return (
+                        <button
+                          key={option.strength}
+                          onClick={() => {
+                            void setBackgroundBlurStrength?.(option.strength)
+                            setShowBlurMenu(false)
+                          }}
+                          disabled={backgroundBlurLoading}
+                          role="menuitemradio"
+                          aria-checked={active}
+                          className={cn(
+                            "flex min-h-16 flex-col items-center justify-center gap-2 rounded-lg border px-2 py-2 text-[10px] font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900 disabled:cursor-not-allowed disabled:opacity-40",
+                            active
+                              ? "border-blue-500 bg-blue-500/15 text-blue-100"
+                              : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-600 hover:text-zinc-100",
+                          )}
+                        >
+                          <span className="flex h-7 items-end gap-1" aria-hidden="true">
+                            {option.dots.map((sizeClass, index) => (
+                              <span
+                                key={`${option.strength}-${sizeClass}-${index}`}
+                                className={cn(
+                                  "rounded-full transition-colors",
+                                  sizeClass,
+                                  active ? "bg-blue-300" : "bg-zinc-500",
+                                )}
+                              />
+                            ))}
+                          </span>
+                          {option.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              </>
             )}
           </div>
 
