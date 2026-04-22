@@ -16,8 +16,9 @@ import {
   Video,
   Copy,
   Settings,
-  Plus,
+  DollarSign,
   ArrowDownUp,
+  Check,
 } from "lucide-react";
 import { NotificationBell } from "@/components/notification-bell";
 import { Button } from "@/components/ui/button";
@@ -78,6 +79,125 @@ function formatTokenAmount(value?: string | null) {
   });
 }
 
+const BUY_SWTD_STEPS = [
+  {
+    title: "Approve funds",
+    description: "Confirm the first wallet popup to prepare your purchase.",
+  },
+  {
+    title: "Convert funds",
+    description: "Confirm the second wallet popup to convert your funds.",
+  },
+  {
+    title: "Complete purchase",
+    description: "Confirm the final wallet popup to receive $SWTD.",
+  },
+] as const;
+
+type BuySwtdProgressState = {
+  activeStep: number | null;
+  completedSteps: number;
+  failedStep: number | null;
+};
+
+function BuySwtdProgressStepper({
+  activeStep,
+  completedSteps,
+  failedStep,
+}: BuySwtdProgressState) {
+  return (
+    <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/80 px-4 py-3">
+      <div className="mx-auto flex w-full max-w-[240px] items-center justify-center">
+        {BUY_SWTD_STEPS.map((step, index) => {
+          const isComplete = index < completedSteps;
+          const isActive = activeStep === index && failedStep === null;
+          const isFailed = failedStep === index;
+
+          return (
+            <div
+              key={step.title}
+              className={index < BUY_SWTD_STEPS.length - 1 ? "flex flex-1 items-center" : "flex items-center"}
+            >
+              <div className="flex shrink-0 flex-col items-center">
+                <div
+                  className={[
+                    "flex size-7 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors",
+                    isComplete
+                      ? "border-emerald-400 bg-emerald-400 text-zinc-950"
+                      : isFailed
+                        ? "border-red-400 bg-red-400/15 text-red-300"
+                        : isActive
+                          ? "border-red-400 bg-red-500/15 text-red-300"
+                          : "border-zinc-700 bg-zinc-900 text-zinc-500",
+                  ].join(" ")}
+                >
+                  {isComplete ? (
+                    <Check className="size-3.5" />
+                  ) : (
+                    <span
+                      className={isActive ? "size-2 animate-pulse rounded-full bg-red-300" : ""}
+                    >
+                      {isActive ? "" : index + 1}
+                    </span>
+                  )}
+                </div>
+              </div>
+              {index < BUY_SWTD_STEPS.length - 1 && (
+                <div
+                  className={[
+                    "mx-3 h-px min-w-10 flex-1 transition-colors",
+                    index < completedSteps ? "bg-emerald-400" : "bg-zinc-800",
+                  ].join(" ")}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-3">
+        {failedStep !== null ? (
+          <>
+            <p className="text-xs font-semibold text-red-300">
+              {BUY_SWTD_STEPS[failedStep]?.title ?? "Purchase failed"}
+            </p>
+            <p className="mt-1 text-[11px] text-red-400">
+              Something went wrong. No duplicate purchase was started.
+            </p>
+          </>
+        ) : completedSteps >= BUY_SWTD_STEPS.length ? (
+          <>
+            <p className="text-xs font-semibold text-emerald-300">
+              Purchase complete
+            </p>
+            <p className="mt-1 text-[11px] text-zinc-500">
+              Your $SWTD purchase was submitted successfully.
+            </p>
+          </>
+        ) : activeStep !== null ? (
+          <>
+            <p className="text-xs font-semibold text-zinc-100">
+              {BUY_SWTD_STEPS[activeStep]?.title}
+            </p>
+            <p className="mt-1 text-[11px] text-zinc-500">
+              {BUY_SWTD_STEPS[activeStep]?.description}
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="text-xs font-semibold text-zinc-100">
+              Three quick confirmations
+            </p>
+            <p className="mt-1 text-[11px] text-zinc-500">
+              You will approve funds, convert them, then complete the purchase.
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function BuySwtdDropdown() {
   const [usdcAmount, setUsdcAmount] = useState("");
   const [quoteAmount, setQuoteAmount] = useState<string | null>(null);
@@ -85,6 +205,11 @@ function BuySwtdDropdown() {
   const [quoting, setQuoting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [progress, setProgress] = useState<BuySwtdProgressState>({
+    activeStep: null,
+    completedSteps: 0,
+    failedStep: null,
+  });
   const currentUser = useQuery(api.users.getCurrentUser, {});
   const { wallets: solanaWallets } = useWallets();
   const { signTransaction } = useSignTransaction();
@@ -167,6 +292,8 @@ function BuySwtdDropdown() {
     setBuying(true);
     setError(null);
     setSuccess(null);
+    setProgress({ activeStep: 0, completedSteps: 0, failedStep: null });
+    let activeStep = 0;
 
     try {
       const config = getPlatformWalletConfig();
@@ -209,6 +336,8 @@ function BuySwtdDropdown() {
         amount,
         destinationWalletAddress: walletAddress,
       });
+      activeStep = 0;
+      setProgress({ activeStep: 0, completedSteps: 0, failedStep: null });
       const signedWithdrawal = await signTransaction({
         wallet: embeddedWallet,
         chain: solanaChain,
@@ -219,6 +348,8 @@ function BuySwtdDropdown() {
           signedWithdrawal.signedTransaction,
         ),
       });
+      activeStep = 1;
+      setProgress({ activeStep: 1, completedSteps: 1, failedStep: null });
 
       const withdrawDeadline = Date.now() + 20_000;
       let actualCreditedUsdcBaseUnits = BigInt(0);
@@ -247,6 +378,8 @@ function BuySwtdDropdown() {
         inputAmountBaseUnits: actualCreditedUsdcBaseUnits.toString(),
       });
 
+      activeStep = 1;
+      setProgress({ activeStep: 1, completedSteps: 1, failedStep: null });
       const signedSwap = await signTransaction({
         wallet: embeddedWallet,
         chain: solanaChain,
@@ -257,6 +390,8 @@ function BuySwtdDropdown() {
           signedSwap.signedTransaction,
         ),
       });
+      activeStep = 2;
+      setProgress({ activeStep: 2, completedSteps: 2, failedStep: null });
 
       const deadline = Date.now() + 20_000;
       let actualCreditedLamports = BigInt(0);
@@ -283,6 +418,8 @@ function BuySwtdDropdown() {
       });
       setQuoteAmount(preparedMeteoraSwap.outputUiAmount);
 
+      activeStep = 2;
+      setProgress({ activeStep: 2, completedSteps: 2, failedStep: null });
       const signedMeteoraSwap = await signTransaction({
         wallet: embeddedWallet,
         chain: solanaChain,
@@ -295,9 +432,15 @@ function BuySwtdDropdown() {
         ),
       });
 
+      setProgress({ activeStep: null, completedSteps: 3, failedStep: null });
       setSuccess("Successfully bought $SWTD");
     } catch (err) {
       console.error("[buy-swtd] failed", err);
+      setProgress({
+        activeStep,
+        completedSteps: Math.max(0, activeStep),
+        failedStep: activeStep,
+      });
       setError("Failed to buy $SWTD");
     } finally {
       setBuying(false);
@@ -307,7 +450,7 @@ function BuySwtdDropdown() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className="relative flex size-9 items-center justify-center rounded-full border border-zinc-700 transition-colors hover:border-zinc-500">
-        <Plus className="size-4 text-zinc-300" />
+        <DollarSign className="size-4 text-zinc-300" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80" sideOffset={8}>
         <div className="px-3 py-3">
@@ -323,6 +466,8 @@ function BuySwtdDropdown() {
             </div>
           </div>
 
+          <BuySwtdProgressStepper {...progress} />
+
           <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/80 p-3">
             <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
               You Pay
@@ -337,6 +482,15 @@ function BuySwtdDropdown() {
                   const nextValue = event.target.value;
                   if (/^\d*\.?\d*$/.test(nextValue)) {
                     setUsdcAmount(nextValue);
+                    if (!buying) {
+                      setError(null);
+                      setSuccess(null);
+                      setProgress({
+                        activeStep: null,
+                        completedSteps: 0,
+                        failedStep: null,
+                      });
+                    }
                   }
                 }}
                 onKeyDown={(event) => {

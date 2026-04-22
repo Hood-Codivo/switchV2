@@ -1,34 +1,42 @@
-"use client"
+"use client";
 
-import { useQuery } from "convex/react"
-import { api } from "@/convex/_generated/api"
-import { usePlatformWallet } from "@/hooks/use-platform-wallet"
-import { Button } from "@/components/ui/button"
-import { Label } from "@/components/ui/label"
-import { Loader2, Copy, Check, Wallet, ExternalLink } from "lucide-react"
-import { useState } from "react"
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import { usePlatformWallet } from "@/hooks/use-platform-wallet";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Loader2, Copy, Check, Wallet, ExternalLink } from "lucide-react";
+import { useState } from "react";
 
 function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   return (
-    <Button variant="ghost" size="icon-sm" onClick={handleCopy} title="Copy to clipboard">
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      onClick={handleCopy}
+      title="Copy to clipboard"
+    >
       {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
     </Button>
-  )
+  );
 }
 
 export default function WalletSettingsPage() {
-  const user = useQuery(api.users.getCurrentUser, {})
-  const { details, usdcBalance, loading: walletLoading, error: walletError } = usePlatformWallet(
-    user?.walletAddress,
-  )
+  const user = useQuery(api.users.getCurrentUser, {});
+  const {
+    details,
+    usdcBalance,
+    loading: walletLoading,
+    error: walletError,
+  } = usePlatformWallet(user?.walletAddress);
 
   if (user === undefined) {
     return (
@@ -36,7 +44,7 @@ export default function WalletSettingsPage() {
         <Loader2 className="size-4 animate-spin" />
         <span>Loading...</span>
       </div>
-    )
+    );
   }
 
   if (user === null) {
@@ -44,7 +52,7 @@ export default function WalletSettingsPage() {
       <p className="text-sm text-muted-foreground">
         You must be signed in to access wallet settings.
       </p>
-    )
+    );
   }
 
   return (
@@ -63,14 +71,19 @@ export default function WalletSettingsPage() {
             <Wallet className="size-5 text-primary" />
           </div>
           <div className="flex-1">
-            <p className="text-sm font-medium text-foreground">Wallet Connected</p>
+            <p className="text-sm font-medium text-foreground">
+              Wallet Connected
+            </p>
             <p className="text-xs text-muted-foreground">Managed by Privy</p>
           </div>
-          <div className="size-2.5 rounded-full bg-green-500" title="Connected" />
+          <div
+            className="size-2.5 rounded-full bg-green-500"
+            title="Connected"
+          />
         </div>
 
         {/* User Wallet Address */}
-        <div className="space-y-2">
+        {/* <div className="space-y-2">
           <Label>Wallet Address</Label>
           <div className="flex items-center gap-2 rounded-md border border-input bg-input/30 px-3 py-2">
             <code className="flex-1 truncate text-sm text-foreground">
@@ -86,7 +99,7 @@ export default function WalletSettingsPage() {
               <ExternalLink className="size-3.5 text-muted-foreground hover:text-foreground" />
             </a>
           </div>
-        </div>
+        </div> */}
 
         {/* Platform Wallet (PDA) */}
         {walletLoading && (
@@ -102,7 +115,7 @@ export default function WalletSettingsPage() {
 
         {details && (
           <div className="space-y-2">
-            <Label>Platform Wallet (PDA)</Label>
+            <Label>Platform Wallet </Label>
             <div className="flex items-center gap-2 rounded-md border border-input bg-input/30 px-3 py-2">
               <code className="flex-1 truncate text-sm text-foreground">
                 {details.platformWalletPda}
@@ -125,12 +138,14 @@ export default function WalletSettingsPage() {
           <div className="space-y-2">
             <Label>USDC Balance</Label>
             <div className="rounded-md border border-input bg-input/30 px-3 py-2">
-              <span className="text-lg font-semibold text-foreground">{usdcBalance}</span>
+              <span className="text-lg font-semibold text-foreground">
+                {usdcBalance}
+              </span>
               <span className="ml-1.5 text-sm text-muted-foreground">USDC</span>
             </div>
           </div>
         )}
       </div>
     </div>
-  )
+  );
 }

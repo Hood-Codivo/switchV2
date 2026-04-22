@@ -1,14 +1,14 @@
-"use client"
+"use client";
 
-import { usePrivy } from "@privy-io/react-auth"
-import { useQuery } from "convex/react"
-import { api } from "@/convex/_generated/api"
-import { Label } from "@/components/ui/label"
-import { Loader2, Mail, CheckCircle } from "lucide-react"
+import { usePrivy } from "@privy-io/react-auth";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import { Label } from "@/components/ui/label";
+import { Loader2, Mail, CheckCircle } from "lucide-react";
 
 export default function AccountSettingsPage() {
-  const { user: privyUser, ready } = usePrivy()
-  const currentUser = useQuery(api.users.getCurrentUser, {})
+  const { user: privyUser, ready } = usePrivy();
+  const currentUser = useQuery(api.users.getCurrentUser, {});
 
   if (!ready || currentUser === undefined) {
     return (
@@ -16,7 +16,7 @@ export default function AccountSettingsPage() {
         <Loader2 className="size-4 animate-spin" />
         <span className="text-sm">Loading account info...</span>
       </div>
-    )
+    );
   }
 
   if (currentUser === null) {
@@ -24,17 +24,17 @@ export default function AccountSettingsPage() {
       <p className="text-sm text-destructive">
         Could not load your account. Please sign in again.
       </p>
-    )
+    );
   }
 
   const googleAccount = privyUser?.linkedAccounts?.find(
     (account) => account.type === "google_oauth",
-  )
+  );
 
   const email =
     googleAccount && "email" in googleAccount
       ? (googleAccount.email as string)
-      : privyUser?.email?.address ?? null
+      : (privyUser?.email?.address ?? null);
 
   return (
     <div className="max-w-xl">
@@ -72,13 +72,13 @@ export default function AccountSettingsPage() {
         </div>
 
         {/* Wallet address (read-only) */}
-        <div className="flex flex-col gap-1.5">
+        {/* <div className="flex flex-col gap-1.5">
           <Label>Wallet Address</Label>
           <p className="break-all text-sm font-mono text-muted-foreground">
             {currentUser.walletAddress}
           </p>
-        </div>
+        </div> */}
       </div>
     </div>
-  )
+  );
 }
