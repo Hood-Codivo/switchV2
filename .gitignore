@@ -2,8 +2,7 @@ node_modules
 
 .env*
 
-# Convex generated files (overwritten by `npx convex dev`)
-convex/_generated/
+# Convex generated files are required by app imports.
 
 .next
 tsconfig.tsbuildinfo
