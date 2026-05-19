@@ -39,6 +39,19 @@ export const streamBillingStateValidator = v.union(
   v.literal("completed"),
 )
 
+export const infrastructureStreamStatusValidator = v.union(
+  v.literal("created"),
+  v.literal("live"),
+  v.literal("ended"),
+  v.literal("exhausted"),
+)
+
+export const infrastructureTokenTransactionTypeValidator = v.union(
+  v.literal("purchase"),
+  v.literal("debit"),
+  v.literal("credit"),
+)
+
 // "ending" is intentionally absent — it exists only as local UI state in
 // use-go-live.ts (GoLiveState) and is never persisted to Convex.
 export type StreamStatus = "idle" | "starting" | "live" | "ended"
@@ -309,4 +322,70 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_external_broadcast", ["externalBroadcastId"])
     .index("by_rtk_recording", ["rtkRecordingId"]),
+  infrastructureOrganizations: defineTable({
+    ownerId: v.id("users"),
+    name: v.string(),
+    slug: v.string(),
+    tokenBalance: v.number(),
+    totalPurchased: v.number(),
+    totalConsumed: v.number(),
+    status: v.union(v.literal("active"), v.literal("suspended")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner", ["ownerId"])
+    .index("by_slug", ["slug"]),
+  infrastructureApiKeys: defineTable({
+    organizationId: v.id("infrastructureOrganizations"),
+    name: v.string(),
+    keyHash: v.string(),
+    keyPrefix: v.string(),
+    createdAt: v.number(),
+    lastUsedAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_organization", ["organizationId"])
+    .index("by_key_hash", ["keyHash"]),
+  infrastructureStreams: defineTable({
+    organizationId: v.id("infrastructureOrganizations"),
+    title: v.string(),
+    externalStreamId: v.optional(v.string()),
+    externalUserId: v.optional(v.string()),
+    status: infrastructureStreamStatusValidator,
+    playbackUrl: v.optional(v.string()),
+    studioPath: v.string(),
+    embedPath: v.string(),
+    hostToken: v.string(),
+    viewerToken: v.string(),
+    tokenCost: v.number(),
+    createdAt: v.number(),
+    startedAt: v.optional(v.number()),
+    endedAt: v.optional(v.number()),
+  })
+    .index("by_organization", ["organizationId"])
+    .index("by_organization_and_status", ["organizationId", "status"])
+    .index("by_external_stream", ["organizationId", "externalStreamId"])
+    .index("by_host_token", ["hostToken"])
+    .index("by_viewer_token", ["viewerToken"]),
+  infrastructureTokenTransactions: defineTable({
+    organizationId: v.id("infrastructureOrganizations"),
+    type: infrastructureTokenTransactionTypeValidator,
+    amount: v.number(),
+    balanceAfter: v.number(),
+    description: v.string(),
+    reference: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_organization", ["organizationId"])
+    .index("by_organization_and_created", ["organizationId", "createdAt"]),
+  infrastructureIntegrationTokens: defineTable({
+    organizationId: v.id("infrastructureOrganizations"),
+    streamId: v.id("infrastructureStreams"),
+    role: v.union(v.literal("host"), v.literal("guest"), v.literal("viewer")),
+    token: v.string(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_stream", ["streamId"])
+    .index("by_token", ["token"]),
 })
