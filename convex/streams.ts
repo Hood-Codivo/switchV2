@@ -47,6 +47,29 @@ function getObjectKeys(value: unknown): string[] {
   return value && typeof value === "object" ? Object.keys(value as Record<string, unknown>) : []
 }
 
+function getNestedString(value: unknown, key: string): string | null {
+  if (!value || typeof value !== "object") return null
+
+  const record = value as Record<string, unknown>
+  const direct = record[key]
+  if (typeof direct === "string" && direct.length > 0) return direct
+
+  for (const child of Object.values(record)) {
+    const nested = getNestedString(child, key)
+    if (nested) return nested
+  }
+
+  return null
+}
+
+function getPlaybackUrl(value: unknown): string | null {
+  return getNestedString(value, "playback_url") ?? getNestedString(value, "playbackUrl")
+}
+
+function getLivestreamId(value: unknown): string | null {
+  return getNestedString(value, "id")
+}
+
 function summarizeUrl(value: string): Record<string, unknown> {
   try {
     const url = new URL(value)
@@ -801,43 +824,57 @@ export const goLive = action({
         resultKeys: getObjectKeys((startBody as Record<string, unknown>).result),
       })
 
-      // Try both data.playback_url and result.playback_url in case the wrapper differs
-      const startData = (startBody as Record<string, Record<string, unknown>>).data
-        ?? (startBody as Record<string, Record<string, unknown>>).result
-      let playbackUrl: string | null = (startData?.playback_url as string) ?? null
+      const livestreamId = getLivestreamId(startBody)
+      let playbackUrl = getPlaybackUrl(startBody)
       logGoLive("playback url initial check", {
         playbackUrlPresent: Boolean(playbackUrl),
+        livestreamIdPresent: Boolean(livestreamId),
       })
 
       if (!playbackUrl) {
-        const deadline = Date.now() + 30_000
+        const deadline = Date.now() + 90_000
         while (!playbackUrl && Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, 1500))
-          const pollRes = await fetch(
-            `${baseUrl}/meetings/${session.cloudflareRoomId}/active-livestream`,
-            { headers: { Authorization: `Bearer ${apiToken}` } },
-          )
-          if (pollRes.ok) {
-            const pollBody = await pollRes.json()
-            logGoLive("rtk active livestream poll", {
-              status: pollRes.status,
-              topLevelKeys: getObjectKeys(pollBody),
-              dataKeys: getObjectKeys((pollBody as Record<string, unknown>).data),
-              resultKeys: getObjectKeys((pollBody as Record<string, unknown>).result),
-            })
-            const pollData = (pollBody as Record<string, Record<string, unknown>>).data
-              ?? (pollBody as Record<string, Record<string, unknown>>).result
-            playbackUrl = (pollData?.playback_url as string) ?? null
-          } else {
-            logGoLive("rtk active livestream poll failed", {
-              status: pollRes.status,
-            })
+          const pollPaths = [
+            `/meetings/${session.cloudflareRoomId}/active-livestream`,
+            ...(livestreamId
+              ? [
+                  `/livestreams/${livestreamId}`,
+                  `/livestreams/${livestreamId}/active-livestream-session`,
+                ]
+              : []),
+          ]
+
+          for (const path of pollPaths) {
+            const pollRes = await fetch(
+              `${baseUrl}${path}`,
+              { headers: { Authorization: `Bearer ${apiToken}` } },
+            )
+            if (pollRes.ok) {
+              const pollBody = await pollRes.json()
+              playbackUrl = getPlaybackUrl(pollBody)
+              logGoLive("rtk livestream poll", {
+                status: pollRes.status,
+                path,
+                playbackUrlPresent: Boolean(playbackUrl),
+                topLevelKeys: getObjectKeys(pollBody),
+                dataKeys: getObjectKeys((pollBody as Record<string, unknown>).data),
+                resultKeys: getObjectKeys((pollBody as Record<string, unknown>).result),
+              })
+              if (playbackUrl) break
+            } else {
+              logGoLive("rtk livestream poll failed", {
+                status: pollRes.status,
+                path,
+              })
+            }
           }
+
+          if (!playbackUrl) await new Promise((r) => setTimeout(r, 1500))
         }
       }
 
       if (!playbackUrl) {
-        throw new Error("Cloudflare did not return a playback URL within 30 s")
+        throw new Error("Cloudflare did not return a playback URL within 90 s")
       }
 
       await ctx.runMutation(api.streams.setLive, { id: streamId, playbackUrl })

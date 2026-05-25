@@ -448,6 +448,44 @@ function mockFetchSequence(
 describe("streams.goLive simulcast", () => {
   afterEach(() => vi.unstubAllGlobals())
 
+  it("polls Cloudflare livestream details when the start response has no playback URL yet", async () => {
+    const t = convexTest(schema, modules)
+    stubEnvsForGoLive()
+
+    await t.run(async (ctx) => seedUserWithSession(ctx, "lateplayback"))
+
+    mockFetchSequence([
+      {
+        ok: true,
+        status: 200,
+        body: { data: { id: "livestream-1", status: "INVOKED" } },
+      },
+      {
+        ok: true,
+        status: 200,
+        body: {
+          data: {
+            livestream: {
+              id: "livestream-1",
+              playback_url: "https://cf.example.com/late/manifest.m3u8",
+            },
+          },
+        },
+      },
+    ])
+
+    const result = await t
+      .withIdentity({ subject: "did:privy:test-lateplayback" })
+      .action(api.streams.goLive, {
+        title: "Late Playback URL",
+        category: "Gaming",
+      })
+
+    const stream = await t.run(async (ctx) => ctx.db.get(result.streamId as Id<"streams">))
+    expect(stream?.status).toBe("live")
+    expect(stream?.playbackUrl).toBe("https://cf.example.com/late/manifest.m3u8")
+  })
+
   it("happy path: creates streamBroadcast and transitions to live", async () => {
     const t = convexTest(schema, modules)
     stubEnvsForGoLive()
