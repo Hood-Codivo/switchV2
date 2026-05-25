@@ -809,14 +809,27 @@ export const goLive = action({
         `${baseUrl}/meetings/${session.cloudflareRoomId}/livestreams`,
         { method: "POST", headers, body: JSON.stringify({}) },
       )
+      let startBody: unknown = null
       if (!startRes.ok) {
         const body = await startRes.text()
-        throw new Error(`Cloudflare livestream start failed: ${startRes.status} — ${body}`)
+        if (startRes.status === 409 && body.includes("LIVESTREAMER is already running")) {
+          logGoLive("rtk livestream already running", {
+            cloudflareRoomId: session.cloudflareRoomId,
+            status: startRes.status,
+          })
+        } else {
+          throw new Error(`Cloudflare livestream start failed: ${startRes.status} — ${body}`)
+        }
+      } else {
+        startBody = await startRes.json()
+      }
+
+      if (startBody === null) {
+        startBody = {}
       }
 
       // Log full response to diagnose field names — Cloudflare RTK uses { data: ... }
       // for POST but may use { result: ... } for GET. Parse defensively.
-      const startBody = await startRes.json()
       logGoLive("rtk livestream start response", {
         status: startRes.status,
         topLevelKeys: getObjectKeys(startBody),

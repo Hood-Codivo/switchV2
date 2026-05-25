@@ -486,6 +486,47 @@ describe("streams.goLive simulcast", () => {
     expect(stream?.playbackUrl).toBe("https://cf.example.com/late/manifest.m3u8")
   })
 
+  it("reuses an active Cloudflare livestream when start returns an already-running 409", async () => {
+    const t = convexTest(schema, modules)
+    stubEnvsForGoLive()
+
+    await t.run(async (ctx) => seedUserWithSession(ctx, "alreadyrunning"))
+
+    mockFetchSequence([
+      {
+        ok: false,
+        status: 409,
+        body: {
+          success: false,
+          error: {
+            code: 409,
+            message: "A LIVESTREAMER is already running for meeting cf-room-sim",
+          },
+        },
+      },
+      {
+        ok: true,
+        status: 200,
+        body: {
+          data: {
+            playback_url: "https://cf.example.com/reused/manifest.m3u8",
+          },
+        },
+      },
+    ])
+
+    const result = await t
+      .withIdentity({ subject: "did:privy:test-alreadyrunning" })
+      .action(api.streams.goLive, {
+        title: "Already Running",
+        category: "Gaming",
+      })
+
+    const stream = await t.run(async (ctx) => ctx.db.get(result.streamId as Id<"streams">))
+    expect(stream?.status).toBe("live")
+    expect(stream?.playbackUrl).toBe("https://cf.example.com/reused/manifest.m3u8")
+  })
+
   it("happy path: creates streamBroadcast and transitions to live", async () => {
     const t = convexTest(schema, modules)
     stubEnvsForGoLive()
